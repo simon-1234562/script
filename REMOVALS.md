@@ -20,7 +20,7 @@ Hardcoded author webhooks, outsider shutdown, and whole-hub imports. Neither ref
 
 ## Pending simplification
 
-The complete simpler navigation and removal of unrelated PvP/trade controls have not shipped. Profile/performance panels and other original controls still exist. A unified Auto Farm control now manages the Sandora levels 10-19 quest/NPC/M1 cycle. Complete quest progression across islands is not implemented.
+The complete simpler navigation and removal of unrelated PvP/trade controls have not shipped. Profile/performance panels and other original controls still exist. A unified Auto Farm control now offers Noah's quest at level 10+ with no upper cutoff, plus a current-quest combat mode requiring manual quest acceptance. Complete quest progression across islands is not implemented.
 
 ## Current quest correction
 
