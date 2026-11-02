@@ -20,7 +20,7 @@ Hardcoded author webhooks, outsider shutdown, and whole-hub imports. Neither ref
 
 ## Pending simplification
 
-The complete simpler navigation, removal of unrelated PvP/trade controls, and unified level-aware Auto Farm control have not shipped. Profile/performance panels and other original controls still exist. Sandora currently uses the separate Auto Quest and working NPC/M1 controls. Complete quest progression across islands is not implemented.
+The complete simpler navigation and removal of unrelated PvP/trade controls have not shipped. Profile/performance panels and other original controls still exist. A unified Auto Farm control now manages the Sandora levels 10-19 quest/NPC/M1 cycle. Complete quest progression across islands is not implemented.
 
 ## Current quest correction
 
