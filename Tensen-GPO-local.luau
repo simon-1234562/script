@@ -13,12 +13,14 @@ end
 -- Compatibility aliases used by the recovered feature code.
 env.__TensenWF = writefile
 env.__TensenGC = getgc
+env.__YanusBuild = "sandora-quest-v2"
 
 env.__TensenAutoQuest = (function()
 -- Quest-only controller. Idle until explicitly enabled; never auto-loaded from config.
 local g = getgenv()
 local Q = { Enabled = false, Status = "off" }
 local generation, cachedNoah, lastScan = 0, nil, -math.huge
+local priorNPCSettings = nil
 local started, lastInput, travelStarted, travelRequested = nil, -math.huge, nil, false
 local function normalize(text)
     return tostring(text or ""):lower():gsub("<[^>]*>", ""):gsub("[^%w]", "")
@@ -42,10 +44,34 @@ local function release()
 end
 function Q.Set(enabled)
     generation += 1
-    Q.Enabled = enabled == true
     release()
-    Q.Status = Q.Enabled and "Sandora - checking current quest" or "off"
+    if priorNPCSettings then
+        if type(g.StopCurrentTween) == "function" then pcall(g.StopCurrentTween) end
+        g.TweenToNPC = priorNPCSettings.enabled
+        g.SelectedNPC = priorNPCSettings.selected
+        priorNPCSettings = nil
+    end
+    Q.Enabled = enabled == true
+    Q.Status = Q.Enabled and "checking level and quest" or "off"
     if not Q.Enabled then return end
+    if type(g.TweenToMob2) ~= "function" or type(g.Level) ~= "function" then
+        Q.Fail("Full hub is not ready. Run the normal hub loader, wait for it to finish, then enable Auto Farm")
+        return
+    end
+    local ok, level = pcall(g.Level)
+    level = ok and tonumber(level) or nil
+    if not level then Q.Fail("Could not read your character level from the HUD"); return end
+    if level < 10 or level >= 20 then
+        Q.Fail("The verified quest route currently covers Sandora levels 10-19; other routes are not implemented yet")
+        return
+    end
+    if g.autofarm then
+        Q.Fail("Turn off Recovered Quest Routes (Advanced) before using the main Auto Farm button")
+        return
+    end
+    priorNPCSettings = {enabled = g.TweenToNPC, selected = g.SelectedNPC}
+    g.SelectedNPC = "Desert Bandit"
+    g.TweenToNPC = true
     local token = generation
     task.spawn(function()
         while Q.Enabled and token == generation do
@@ -66,13 +92,17 @@ end
 local function questState(gui)
     local quest = gui:FindFirstChild("Quest")
     local main = quest and quest:FindFirstChild("Main")
-    if not main then return "unknown" end
-    if not visible(main, gui) then return "none" end
-    local text = {}
-    for _, item in ipairs(main:GetDescendants()) do
-        if (item:IsA("TextLabel") or item:IsA("TextButton")) and visible(item, gui) then text[#text+1] = item.Text end
+    local info = main and main:FindFirstChild("Info")
+    local top = info and info:FindFirstChild("Top")
+    local nameLabel = top and top:FindFirstChild("QuestName")
+    local progressLabel = top and top:FindFirstChild("Progress")
+    if not main or not info or not nameLabel or not progressLabel then return "unknown" end
+    -- Daily tracked objectives and recommended quests are separate UI branches.
+    if not visible(info, gui) then return "none" end
+    if normalize(nameLabel.Text):find("desertbandit", 1, true) then
+        return "active", progressLabel.Text
     end
-    return normalize(table.concat(text, " ")):find("desertbandit", 1, true) and "active" or "other"
+    return "other"
 end
 local function noahNear(root)
     if cachedNoah and cachedNoah.Parent then return cachedNoah end
@@ -91,7 +121,8 @@ local function noahNear(root)
     end
 end
 local function choice(gui, expected)
-    for _, item in ipairs(gui:GetDescendants()) do
+    local dialogue = gui:FindFirstChild("Dialogue")
+    for _, item in ipairs(dialogue and dialogue:GetDescendants() or {}) do
         if (item:IsA("TextButton") or item:IsA("TextLabel")) and normalize(item.Text) == expected and visible(item, gui) then
             local button = item:IsA("GuiButton") and item or item:FindFirstAncestorWhichIsA("GuiButton")
             if button and visible(button, gui) and button.AbsoluteSize.X > 0 and button.AbsoluteSize.Y > 0 then return button end
@@ -110,14 +141,19 @@ function Q.Step()
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     local gui = player:FindFirstChild("PlayerGui")
     if not root or not hum or hum.Health <= 0 or not gui then release(); Q.Status = "waiting to respawn"; return end
-    local state = questState(gui)
+    local state, progress = questState(gui)
     if state == "active" then
         release()
-        Q.Status = "Desert Bandits quest active - using your existing NPC/M1 settings"
+        Q.Status = "Sandora - Desert Bandits " .. tostring(progress or "")
         return
     end
     if state == "other" then Q.Fail("Another quest is active; finish or quit it first"); return end
     if state == "unknown" then Q.Fail("Quest panel was not found; send the Auto Quest console message"); return end
+    local readOk, currentLevel = pcall(g.Level)
+    if readOk and tonumber(currentLevel) and tonumber(currentLevel) >= 20 then
+        Q.Fail("Reached level 20. The next island quest route is not implemented yet; your previous NPC settings were restored")
+        return
+    end
     local noah = noahNear(root)
     local part = noah and (noah:FindFirstChild("HumanoidRootPart") or noah.PrimaryPart or noah:FindFirstChildWhichIsA("BasePart", true))
     if not part then Q.Fail("Noah was not found in the nearby NPCs; stand beside him and try again"); return end
@@ -24817,8 +24853,8 @@ Private server travel needs teleport queue support]],
 
             addStatus(Farm, "AutoQuest")
             getgenv().__TensenAutoQuest.Toggle = Farm:AddToggle({
-                Name = "Auto Quest (Sandora)",
-                Description = "Return to Noah and repeat Desert Bandits. Use your working Tween To NPC and M1 settings. Enable manually each session.",
+                Name = "Auto Farm",
+                Description = "Sandora levels 10-19: collect Noah's quest, select Desert Bandits, farm them, and repeat. Enable manually each session.",
                 Default = false,
                 -- No persistence flag: this controller must not start from a saved config.
                 Callback = function(enabled) getgenv().__TensenAutoQuest.Set(enabled) end,
@@ -24827,7 +24863,7 @@ Private server travel needs teleport queue support]],
 			addStatus(Farm, "Farm")
 
 			Farm:AddToggle({
-				Name = "Auto Farm (Recovered Routes)",
+				Name = "Recovered Quest Routes (Advanced)",
 				Description = "Recovered routes: First Sea Fishman quest (190+), or Second Sea wolves. Early-level quests are missing.",
 				Default = getgenv().autofarm or false,
 				Flag = "AutoFarmToggle",
