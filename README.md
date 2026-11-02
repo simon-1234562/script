@@ -32,3 +32,9 @@ The user confirmed that approach, combat after manually accepting, and returning
 A simulated flow using the actual controller advances How can I help? -> Alright! -> visible active quest and releases movement ownership. Fallback coordinate tests cover GUI inset and label-only choices. Full compilation passes. Actual GPO dialogue input still needs user verification.
 
 Roblox coordinate reference: https://create.roblox.com/docs/reference/engine/classes/GuiBase2d
+
+## Live NPCCHAT correction
+
+A subsequent live report identified the actual opening choice as NPCCHAT/Frame/go, a visible TextButton with MouseButton1Click and Activated listeners. The separate Dialogue screen is disabled. The prior controller searched only Dialogue, so its click helper never received Noah's choice. The choice finder now prioritizes visible NPCCHAT and retains Dialogue only as a fallback for other layouts. An already-open NPCCHAT conversation is not reopened while choices are appearing.
+
+The exact live hierarchy is covered by a regression: disabled Dialogue plus NPCCHAT/Frame/go advances both opening choices and confirms the quest. Compilation and all prior controller tests pass. In-game verification of this correction is pending. Build: npcchat-dialogue-v7.
