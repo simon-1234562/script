@@ -1,0 +1,16 @@
+Build: compact-profiles-v8
+Date: 2026-11-02
+
+PASS: Complete source compiles with official Luau 0.745 (--null).
+PASS: Actual controller in isolated mocks: idle startup, profile selection/minimums, Noah level 9/14/20/500 behavior, target alias and plural matching, strict Bandit vs Desert Bandit matching, current quest renewal pause/resume, settings restoration, movement ownership/release, missing helper/NPC, conflicting quest, timeout and notification deduplication.
+PASS: Rotated giver approach uses the front position at root height; combat hover/shuffle/climb/snap are disabled for interaction; vertical proximity is checked.
+PASS: Actual NPCCHAT/Frame/go hierarchy with disabled Dialogue, single-event click dispatch, two-stage acceptance, GUI inset fallback, alternate positive text and purchase rejection.
+PASS: Actual engine cleanup disconnects movement, destroys movers, restores controls and tolerates repeated stop.
+PASS: Actual toggle row and pill activate once each.
+PASS: Diagnostic chooses normal Quest even after a 350-node DailyQuests hierarchy.
+PASS: Full compact UI mounts all control types, switches tabs, hides/reopens and destroys. Real navigation mounts in First Sea, Second Sea and Battle Royale mocks, including disabled-tab calls.
+PASS: Compact UI creates zero RenderStepped connections, Sounds or editable FPS images in the mock.
+PASS: Literal-flag audit: only the documented 20 removals; 3 profile fields added; existing farming controls retained.
+PASS: Known working v7 checkpoint Git blob matches published 51de1b10e6ad971df858bee59bd3068ad147e120.
+
+Live evidence: the user confirmed Noah acceptance/farming/return works in v7. This new compact UI and additional profiles have NOT been run in Roblox. Tests use mocks; they do not measure FPS, memory, executor compatibility, server behavior or ban risk. Inherited advanced farming modes have not been independently validated. No reference hub was executed wholesale.
