@@ -1,42 +1,29 @@
 # Tensen GPO local recovery
 
-Use Tensen-GPO-local.luau. It contains the edited UI; oxideui-local.luau is a reference copy and does not need to run separately.
+Use the complete Tensen-GPO-local.luau file, or the public loader in loader.luau. Start in a fresh Roblox session after updating: an already-loaded hub cannot reliably be replaced in place. Right Shift toggles the UI. The UI is bundled locally.
 
-Start in a fresh Roblox session. Open the main file as text and use its complete contents in your executor. Toggle the UI with Right Shift. If the original ran previously, restart Roblox first: its existing hooks and background tasks cannot reliably be undone.
+## Sandora test build
 
-## Changes
+Added from user-supplied screenshots: Noah, the dialogue choices 'How can I help?' and 'Alright!', and the active 'Defeat Desert Bandits' quest requiring seven Desert Bandits.
 
-- Preserved all 153 literal feature flag declarations in tesenrecover.txt, in order, and its recovered gameplay code and original credits.
-- Removed the initial anti-tamper module: tool detection, punishment, clipboard clearing, executor interference, dump deletion, file-write interception, and recurring file purges.
-- Bundled a local UI snapshot instead of executing the changing GitHub download.
-- Removed the UI presence backend, HTTP hook, registration, network tags, and remote administration/kick mechanism. These are intentionally excluded from the preserved features.
-- Replaced a deliberate error in the orb diagnostic with a color display.
-- Kept normal config management, including explicit config deletion, and the optional user-configured fruit webhook. The webhook defaults to off in a fresh environment.
+For First Sea characters below level 190, Auto Farm now uses the Sandora adapter. Start beside Noah on Sandora. If the Desert Bandits quest is already active, the adapter seeks a nearby living Desert Bandit and uses the existing combat/movement helpers. Otherwise it approaches a nearby Noah, opens his prompt (or the displayed T interaction), clicks the observed dialogue choices, and waits for the active quest to appear before combat. It repeats after the quest disappears. It does not guess the game's internal quest identifier.
 
-## Known limits
+The active quest is detected using the recovery's existing PlayerGui.Quest.Main hierarchy. Visible NPC names may differ from internal names. Those assumptions require an in-game test. If automatic dialogue fails, accept the quest manually and enable Auto Farm. Pick Melee if using a fighting style, or Sword if using a sword.
 
-This is a cleaned recovery build, not a verified fully working GPO release. The supplied code is incomplete:
+Stops report a console warning, notification and status text. Missing Noah or another active quest produces an explanation rather than initiating Fishman travel. Dialogue confirmation has a 25-second timeout. Normal completion, stopping Auto Farm and missing enemy spawns clear the Sandora combat target.
 
-- flowerPrompt has an empty body.
-- A Big Mom chase branch explicitly throws 'attempt to call a number value' / 'attempt to compare nil < number'. That callback also ends without implementing the movement described by its comments.
-- Parts of fruit recording, configuration refresh, navigation routes, and timing data are described as missing or approximated in the source.
-- The earlier tensenpoop.txt also contains broken/dead branches and does not supply verified implementations of the missing routines.
+This adds Sandora only. It does not implement a complete level-based route through all First Sea islands. At level 190 the existing recovered Fishman branch applies; Second Sea uses its recovered wolves branch. The Fishman branch still requires in-game validation and contains approximated route data.
 
-These gameplay gaps remain. Preserving a toggle does not prove the feature works. Features may fail, remain inactive, or require repairs against the current GPO structure. All currently recovered feature code is included; missing original code cannot be faithfully recovered from these files alone.
+## Cleanup and retained features
 
-Both output Lua files compile with official Luau 0.745. Compilation checks syntax and compiler limits, not Roblox API behavior or gameplay. No executor or GPO session was used. This does not audit the executor executable or establish that execution is safe.
+All 153 original literal feature flag declarations and original credits are retained. The initial anti-tamper module, destructive file purges, clipboard clearing, debug/write interception and punishment were removed. The bundled UI's network presence backend, HTTP interception and remote administration/kick mechanism were removed. Normal configuration management and the optional user-configured fruit webhook remain. The webhook defaults to off.
 
-## Provenance
+Other recovery gaps remain, including the empty flowerPrompt function, an incomplete Big Mom chase callback and approximated/missing parts of fruit recording, navigation and timing. Preserving a control does not establish that its feature works. The executor executable has not been audited.
 
-Hub source: user-provided tesenrecover.txt. Original credits retained.
-Source SHA-256 (UTF-8 text normalized to LF): c245b52b3e672d47ca28761577827acb37fbd92988be6136fdca536271f3ad6c
-UI source: https://raw.githubusercontent.com/LeviOnTopLOL/Halloween/refs/heads/main/oxideui.lua
-UI retrieval date: November 2, 2026.
-Downloaded UI SHA-256: ec6aa1dd775c0b6d755bb230e7ee0ec30b0b9319bd0548d7106bc627e35fa87a
-Bundled build SHA-256: ff611f1f4bce449e709c59c9546bce7a610c2516f23bf1ba83469e4f4e67af54
+## Validation
 
-See VALIDATION.txt for checks.
+Official Luau 0.745 compiles the entire updated script successfully. Isolated tests execute the actual Sandora adapter with simulated world/UI objects: active quest and target selection, no-spawn wait, completed quest, unrelated quest rejection, Noah interaction, both dialogue choices, dialogue timeout and stopping/reset. All pass. No GPO gameplay was executed for validation. User testing remains necessary.
 
-## First Sea autofarm correction
-
-The First Sea recovery has only a Fishman quest branch; its existing quest condition requires level 190. It has no Sandora or other early-level quest selection despite the original UI description. Auto Farm now stops below that threshold with an explanation instead of attempting Fishman travel. This does not add low-level farming. Fishman arrival waits reacquire streamed instances, verify proximity and stop with a visible reason on timeout. Toggle state follows the stop. Functional GPO testing is still required.
+Bundled build SHA-256: 53120cd5b96bd87e06b6e33493920f5be93a89fad8cb881109c480394037276b
+Original UI source: https://raw.githubusercontent.com/LeviOnTopLOL/Halloween/refs/heads/main/oxideui.lua
+Original hub input: user-provided tesenrecover.txt.
