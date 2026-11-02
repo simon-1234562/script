@@ -13,7 +13,7 @@ end
 -- Compatibility aliases used by the recovered feature code.
 env.__TensenWF = writefile
 env.__TensenGC = getgc
-env.__YanusBuild = "sandora-quest-v2"
+env.__YanusBuild = "sandora-stop-v3"
 
 env.__TensenAutoQuest = (function()
 -- Quest-only controller. Idle until explicitly enabled; never auto-loaded from config.
@@ -47,7 +47,7 @@ function Q.Set(enabled)
     release()
     if priorNPCSettings then
         if type(g.StopCurrentTween) == "function" then pcall(g.StopCurrentTween) end
-        g.TweenToNPC = priorNPCSettings.enabled
+        g.TweenToNPC = false -- stopping Auto Farm must stop its NPC driver
         g.SelectedNPC = priorNPCSettings.selected
         priorNPCSettings = nil
     end
@@ -85,6 +85,10 @@ function Q.Fail(reason)
     Q.Set(false)
     Q.Status = "stopped - " .. reason
     warn("[Auto Quest] " .. reason)
+    local ui = g.TensenUILib
+    if ui and type(ui.Notify) == "function" then
+        pcall(function() ui:Notify({Title = "Auto Farm could not start", Content = reason, Duration = 12}) end)
+    end
     if Q.Toggle and type(Q.Toggle.Set) == "function" then pcall(function() Q.Toggle:Set(false) end) end
     -- Keep the reason visible even when the toggle's callback runs.
     Q.Status = "stopped - " .. reason
@@ -23919,6 +23923,11 @@ function SubTab:AddToggle(opts)
         if a then tween(knob,{Position=kp}) else knob.Position=kp end
     end
     local function set(v) v=v==true; if v==value then return end; value=v; render(true); fire(opts.Callback,value) end
+    -- The entire row is an input target; labels no longer require hitting a tiny pill.
+    local hit = make("TextButton", {Name="ToggleHitArea",Text="",BackgroundTransparency=1,
+        Size=UDim2.fromScale(1,1),ZIndex=row.ZIndex+1,Parent=row})
+    pill.ZIndex=hit.ZIndex+1; knob.ZIndex=pill.ZIndex+1
+    hit.MouseButton1Click:Connect(function() set(not value) end)
     pill.MouseButton1Click:Connect(function() set(not value) end); render(false)
     return registerFlag(opts.Flag, "toggle", {Set=function(_,v) set(v) end, Get=function() return value end})
 end
@@ -24852,6 +24861,19 @@ Private server travel needs teleport queue support]],
 			})
 
             addStatus(Farm, "AutoQuest")
+            Farm:AddButton({
+                Name = "STOP NPC MOVEMENT",
+                Description = "Stops Auto Farm and NPC chasing, and releases the active movement forces.",
+                Callback = function()
+                    local env = getgenv()
+                    local q = env.__TensenAutoQuest
+                    q.Set(false)
+                    if q.Toggle then q.Toggle:Set(false) end
+                    env.TweenToNPC = false
+                    if env.TensenUILib then env.TensenUILib:SetFlag("TweenToNPCToggle", false) end
+                    if type(env.StopCurrentTween) == "function" then env.StopCurrentTween() end
+                end,
+            })
             getgenv().__TensenAutoQuest.Toggle = Farm:AddToggle({
                 Name = "Auto Farm",
                 Description = "Sandora levels 10-19: collect Noah's quest, select Desert Bandits, farm them, and repeat. Enable manually each session.",
@@ -24997,8 +25019,19 @@ Private server travel needs teleport queue support]],
 				Default = false,
 				Flag = "TweenToNPCToggle",
 				Callback = function(tweenToNpc)
-					getgenv().TweenToNPC = tweenToNpc
-				end,
+                    local env = getgenv()
+                    if not tweenToNpc then
+                        local quest = env.__TensenAutoQuest
+                        if quest and quest.Enabled then
+                            quest.Set(false)
+                            if quest.Toggle then quest.Toggle:Set(false) end
+                        end
+                        env.TweenToNPC = false
+                        if type(env.StopCurrentTween) == "function" then env.StopCurrentTween() end
+                    else
+                        env.TweenToNPC = true
+                    end
+                end,
 			})
 
 			Farm:AddToggle({
@@ -36338,6 +36371,7 @@ Private server travel needs teleport queue support]],
 					raycastParams.FilterDescendantsInstances = { character }
 
 					-- ends a hub tween: zeroes and removes the movers, restores noclip and water walking
+                    local stopThisTween
 					local function cleanup(arrived)
 						pcall(function()
 							velocity.Velocity = Vector3.zero
@@ -36359,6 +36393,7 @@ Private server travel needs teleport queue support]],
 							state.Gyro = nil
 							state.Vel = nil
 							state.IsMobTween = nil
+                            if state.Stop == stopThisTween then state.Stop = nil end
 							state.Attached = false
 							state.ClimbStartTime = nil
 							state.AtGoal = arrived == true
@@ -36382,7 +36417,12 @@ Private server travel needs teleport queue support]],
 						getgenv().NoclipOverride = false
 					end
 
-					-- TweenToCFrame step
+					-- Export this engine's cleanup, rather than depending on the optional Big Mom module.
+                    stopThisTween = function() cleanup(false) end
+                    state.Stop = stopThisTween
+                    getgenv().StopCurrentTween = stopThisTween
+
+                    -- TweenToCFrame step
 					local lastProgress = tick()
 					local lastFlat = Vector3.new(root.Position.X, 0, root.Position.Z)
 					local stuckUntil = 0
