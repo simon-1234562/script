@@ -1,4 +1,4 @@
-# Tensen GPO: Auto Quest (Sandora)
+# yanus hub: cleanup and Sandora quest work
 
 Start in a fresh Roblox session and run loader.luau. Start beside Noah on Sandora, or with his Desert Bandits quest active. Keep Auto Farm (Recovered Routes) off. Use your working Tween To NPC / selected Desert Bandit and M1/weapon settings, then enable Auto Quest (Sandora) in the Auto Farm tab.
 
@@ -18,4 +18,10 @@ All 153 original feature flags and original credits remain. Recovered higher-lev
 
 Original input: user-provided tesenrecover.txt.
 UI source: https://raw.githubusercontent.com/LeviOnTopLOL/Halloween/refs/heads/main/oxideui.lua
-Build SHA-256: 4fbdac62f5f40e21926b205b3869833e60f2449c1c2aee1da4c6992f2051cfb5
+Build SHA-256: 6f855afe3338855fa26b583b3c007138fcfbf7cbcd81c6ddd64f199c494ab010
+
+## Latest changes
+
+The startup splash, music player, default logo, promotional footer text and one unused startup constructor were removed. The window is named yanus hub. See REMOVALS.md for restoration references and pending work. All farming flags remain. The complete single-button UI redesign is still pending.
+
+Noah travel now uses the tested NPC tween entry point. The first session diagnostic confirmed NPC names and positions but exhausted its UI budget on DailyQuests. Diagnostic v2 prioritizes Quest and saves yanus-diagnostic-v2.json. Send that file after accepting Noah's quest to verify the real quest panel. The diagnostic itself does not run farming or fire remotes.
