@@ -1,27 +1,22 @@
-# yanus hub: cleanup and Sandora quest work
+# yanus hub: Sandora farming test
 
-Start in a fresh Roblox session and run loader.luau. Start beside Noah on Sandora, or with his Desert Bandits quest active. Keep Auto Farm (Recovered Routes) off. Use your working Tween To NPC / selected Desert Bandit and M1/weapon settings, then enable Auto Quest (Sandora) in the Auto Farm tab.
+Rejoin for a fresh Roblox session. Run the normal loader from loader.luau, wait for the hub to finish loading, then enable the main Auto Farm control in the Auto Farm tab. The separate diagnostic scripts do not load movement or farming helpers. Keep Auto Load off while testing.
 
-While the Desert Bandits quest is active, Auto Quest leaves your existing combat settings in control. When no quest is active, it pauses NPC chasing and the shared M1 loops, returns to a nearby Noah, opens his dialogue, and clicks 'How can I help?' then 'Alright!'. Confirming the quest releases the lock and resumes the existing NPC movement/combat.
+The main control currently supports First Sea Sandora levels 10-19. It reads the level, chooses Desert Bandit, enables the existing NPC movement/M1 path, reads the active quest, and handles returning to Noah to accept the quest again. You no longer need to select the bandit or enable Tween To NPC separately. Your configured weapon setting is retained. Switching off restores the previous NPC selection/toggle. The control starts off every session and is not persisted in configs.
 
-The new toggle starts off each session and is not saved in configs. No controller loop or scan starts before manual enabling. Only the NPC container is searched for Noah; the controller never enumerates the whole world. Selected NPC, weapon and Tween To NPC settings are preserved. Other automatic travel modes must be off.
+Confirmed from the supplied live diagnostic:
+- Noah: workspace.NPCs.Noah, with an interaction prompt.
+- Enemy model: workspace.NPCs['Desert Bandit'].
+- Active quest title: PlayerGui.Quest.Main.Info.Top.QuestName.
+- Progress: PlayerGui.Quest.Main.Info.Top.Progress, e.g. '0 / 7 Desert Bandit'.
+- PlayerGui.Dialogue is present. Dialogue choices still require in-game interaction verification.
 
-Supports only Noah's Sandora Desert Bandits quest. Other active quests, missing Noah, travel failure and dialogue failure produce an explanatory stop. It uses the recovery's PlayerGui.Quest.Main hierarchy, which still needs in-game confirmation. If dialogue fails, accept the quest manually and enable Auto Quest again. Right Shift toggles the hub unless a saved keybind overrides it.
+The normal quest reader ignores QuestTracker recommendations and hidden TrackedDaily objectives. When a quest is active, the existing NPC/M1 routines farm. When it ends, those routines pause while collecting the next quest. On reaching level 20, it stops before accepting another quest because the next island route is not implemented. This is not an all-level farming release.
 
-## Validation and limits
+Recovered Quest Routes (Advanced) and the other original farming modes remain separate. Keep conflicting travel/farm modes off during this test. The full simpler navigation and removal of unrelated PvP/trade controls are still pending. See REMOVALS.md for completed cleanup and restoration references.
 
-Full build compiles with official Luau 0.745. Isolated tests using the actual controller pass for idle startup, preserving NPC settings, movement lock/release, Noah prompt, both dialogue choices, conflicting quest, missing NPC, travel/dialogue timeouts and disabling cleanup. No GPO execution was used for these tests. The user has confirmed existing NPC tweening/M1 work and the rolled-back hub can remain open. The new quest controller still needs in-game testing.
+## Validation
 
-The earlier combined Sandora farm adapter remains rolled back after reported crashes. The compile-only diagnostic passed; the intermittent startup shutdown cause is unconfirmed. Separate diagnose.luau and diagnose-ui.luau tools remain available.
+Official Luau 0.745 compiles the build. Isolated tests pass against the actual controller for the reported GUI hierarchy, progress display, automatic NPC selection/restoration, startup idle state, Noah prompt, dialogue choices, movement lock/release, timeouts, missing helpers, hidden quest panels and level boundaries. All 153 original literal feature flags remain. No GPO session was used to validate the new quest cycle; the user previously confirmed manual NPC tweening/M1 work.
 
-All 153 original feature flags and original credits remain. Recovered higher-level routes and other gameplay still contain missing/approximated code. The destructive initial anti-tamper and UI presence/admin kick/HTTP interception were removed. Normal config management and the optional user-configured fruit webhook remain. The executor executable has not been audited.
-
-Original input: user-provided tesenrecover.txt.
-UI source: https://raw.githubusercontent.com/LeviOnTopLOL/Halloween/refs/heads/main/oxideui.lua
-Build SHA-256: 6f855afe3338855fa26b583b3c007138fcfbf7cbcd81c6ddd64f199c494ab010
-
-## Latest changes
-
-The startup splash, music player, default logo, promotional footer text and one unused startup constructor were removed. The window is named yanus hub. See REMOVALS.md for restoration references and pending work. All farming flags remain. The complete single-button UI redesign is still pending.
-
-Noah travel now uses the tested NPC tween entry point. The first session diagnostic confirmed NPC names and positions but exhausted its UI budget on DailyQuests. Diagnostic v2 prioritizes Quest and saves yanus-diagnostic-v2.json. Send that file after accepting Noah's quest to verify the real quest panel. The diagnostic itself does not run farming or fire remotes.
+The loading splash, music player, original default logo, promotional footer and an unused startup constructor have been removed. Original author attribution remains in source. Other recovered features may still be incomplete. Executor-based farming has no ban-free guarantee.
