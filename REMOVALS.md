@@ -1,27 +1,31 @@
-# yanus hub: removal and restoration inventory
+# Removal and restoration inventory
 
-Backup before this cleanup: GitHub commit 6931a502ee4aa2527fbb8615c9ed020395ab7ca0 contains the prior full script. Restoring it also restores the older Noah travel helper, so use it only as a reference for bringing individual features back.
+Build: compact-profiles-v8. The user-confirmed Noah checkpoint is [commit 51ca7a78](https://github.com/simon-1234562/script/blob/51ca7a78d5cbc85ad704784aa08c7e69ed34174b/Tensen-GPO-local.luau). Its [pinned loader](loader-dialogue-v7.luau) is retained. That checkpoint already had the earlier splash/music/security cleanup; use original supplied sources only as references for those older removed features.
 
-## Removed in this pass
-
-| Item | Reason | Restoration reference |
+| Removed or disabled | Scope / reason | Where to restore from |
 | --- | --- | --- |
-| Startup loading/splash animation | Avoid the startup overlay and its animation work | Old CreateWindow LoadingAnimation option and loader block |
-| Built-in music player, playlist panel, sound instance and its listeners | Unrelated to farming or quality of life | Old embedded buildMusicPlayer function |
-| Default Tensen logo asset | Replace old branding without loading a decorative logo | Old embedded DEFAULT_LOGO |
-| Tensen window title and Discord promotion in the footer | Rebrand visible interface | Old CreateWindow Name, BrandSubtitle and StatusText options |
-| Unused top-level VirtualInputManager construction | Returned object was discarded | Original hub startup just after PlayersService/RunService |
+| Startup splash and large logo animation | No loading overlay or logo asset fetch | Original embedded CreateWindow loader |
+| Music player, playlist and Sound listeners | Decorative audio | Original embedded buildMusicPlayer |
+| Sidebar avatar/profile, branding art and status promotion | Replaced with a compact text header | Checkpoint embedded CreateWindow |
+| FPS/performance graph and decorative UI render work | No UI per-frame callbacks or editable graph image | Checkpoint embedded CreateWindow |
+| Ripple, shimmer, animated selection effects and UI tweens | Control feedback now applies directly | Checkpoint embedded UI helpers/window |
+| Old wide sidebar and bottom hotbar | Replaced by horizontal navigation and subnavigation | Checkpoint UI window and tab layout |
+| Player ESP controls and enablement | Island/loot ESP retained; player ESP forced off | Checkpoint ESP UI; inactive backend helpers may remain |
+| Animated/rainbow/pulsing ESP options | Flags forced off; static island ESP retained | Checkpoint ESP settings |
+| PvP/player-target UI, selection and movement worker | Removed player-chasing path; manual NPC farming retained | Checkpoint autoFarmPlayerTab and F2.TweenToPlayer worker |
+| Auto Trade UI and worker | Removed account/item exchange automation | Checkpoint Trade UI and auto trade worker |
+| Configuration autoload, autoload toggle and buttons | Startup remains idle; explicit Load Config retained and repaired | Checkpoint config/autoload block |
+| Destructive anti-tamper, UI-presence/admin reporting | Earlier cleanup; not restored | Original supplied recovery source only |
+| Discarded startup VirtualInputManager construction | Earlier unused construction | Original hub startup |
 
-Original author attribution remains in source comments. Tensen-named internal globals and config folders are retained for compatibility. All 153 original literal feature flags and their farming code remain.
+## Preserved
 
-## Excluded from the newly supplied reference scripts
+Existing NPC movement/M1, combat settings, recovered advanced routes, Juzo/Mihawk/Roger/Big Mama, fishing, fish selling, bait crafting, fruit storage, merchant automation, auto stats, travel/private server, movement/protection QoL, static island/loot ESP, performance options and manual configs remain. These inherited modes were preserved, not independently verified in game. Battle Royale retains its dungeon/loot interface; player-target automation was removed.
 
-Hardcoded author webhooks, outsider shutdown, and whole-hub imports. Neither reference file was executed or merged wholesale. See ADDITIONAL-SOURCE-REVIEW.md for details.
+The literal-flag audit removes only the 20 controls listed below and adds QuestProfileChoice, QuestEnemyOverride and QuestGiverOverride. Counts are 149 unique literal flags before and 132 after; dynamically constructed flags are outside that count. Some unused compatibility helper definitions remain; removal of a UI/worker does not mean every related symbol was deleted.
 
-## Pending simplification
+Removed flags: TradeMainAccountInput, TradeItemAltDropdown, TradeItemMainDropdown, TradeMainSendQtySlider, TradeTimeoutSlider, AutoTradeToggle, ESP_PlayerTeamNames, SelectPlayerDropdown, PvPAutoTargetToggle, PvPSkipTeammatesToggle, TweenToPlayerToggle, PvP_PvPFeintOnBlock, PvP_PvPShuffle, PvP_PvPAutoEquip, PvPOffsetSlider, PvPRangeSlider, PvP_PvPShuffleStuds, PvP_PvPShufflePeriod, PvP_PvPFeintRetry, AutoLoadToggle.
 
-The complete simpler navigation and removal of unrelated PvP/trade controls have not shipped. Profile/performance panels and other original controls still exist. A unified Auto Farm control now offers Noah's quest at level 10+ with no upper cutoff, plus a current-quest combat mode requiring manual quest acceptance. Complete quest progression across islands is not implemented.
+## Restoration
 
-## Current quest correction
-
-Return to Noah now calls the same TweenToMob2 entry point as the working Tween To NPC feature. Noah lookup uses direct NPC models, avoiding the clothing/accessory scan. Compilation and isolated controller tests pass; in-game movement and quest acceptance remain unverified.
+Use the pinned checkpoint to restore individual removed controls together with their workers and dependencies. Restoring an entire checkpoint also restores its older interface. Do not combine a restored movement or trade worker with a second live copy. Restart Roblox between versions. Hardcoded author reporting and outsider shutdown from the extra reference sources were never imported; see ADDITIONAL-SOURCE-REVIEW.md.
