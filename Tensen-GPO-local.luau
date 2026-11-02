@@ -12,6 +12,161 @@ end
 env.__TensenWF = writefile
 env.__TensenGC = getgc
 
+env.__TensenAutoQuest = (function()
+-- Quest-only controller. Idle until explicitly enabled; never auto-loaded from config.
+local g = getgenv()
+local Q = { Enabled = false, Status = "off" }
+local generation, cachedNoah, lastScan = 0, nil, -math.huge
+local started, lastInput, travelStarted, travelRequested = nil, -math.huge, nil, false
+local function normalize(text)
+    return tostring(text or ""):lower():gsub("<[^>]*>", ""):gsub("[^%w]", "")
+end
+local function visible(item, gui)
+    while item and item ~= gui do
+        if item:IsA("GuiObject") and not item.Visible then return false end
+        if item:IsA("ScreenGui") and not item.Enabled then return false end
+        item = item.Parent
+    end
+    return item == gui
+end
+local function stopOwnTravel()
+    if travelRequested and type(g.StopCurrentTween) == "function" then pcall(g.StopCurrentTween) end
+    travelRequested, travelStarted = false, nil
+end
+local function release()
+    stopOwnTravel()
+    g.AutoQuestBusy = false
+    started = nil
+end
+function Q.Set(enabled)
+    generation += 1
+    Q.Enabled = enabled == true
+    release()
+    Q.Status = Q.Enabled and "Sandora - checking current quest" or "off"
+    if not Q.Enabled then return end
+    local token = generation
+    task.spawn(function()
+        while Q.Enabled and token == generation do
+            local ok, err = pcall(Q.Step)
+            if not ok then Q.Fail("Quest error: " .. tostring(err)) end
+            task.wait(0.5)
+        end
+    end)
+end
+function Q.Fail(reason)
+    Q.Set(false)
+    Q.Status = "stopped - " .. reason
+    warn("[Auto Quest] " .. reason)
+    if Q.Toggle and type(Q.Toggle.Set) == "function" then pcall(function() Q.Toggle:Set(false) end) end
+    -- Keep the reason visible even when the toggle's callback runs.
+    Q.Status = "stopped - " .. reason
+end
+local function questState(gui)
+    local quest = gui:FindFirstChild("Quest")
+    local main = quest and quest:FindFirstChild("Main")
+    if not main then return "unknown" end
+    if not visible(main, gui) then return "none" end
+    local text = {}
+    for _, item in ipairs(main:GetDescendants()) do
+        if (item:IsA("TextLabel") or item:IsA("TextButton")) and visible(item, gui) then text[#text+1] = item.Text end
+    end
+    return normalize(table.concat(text, " ")):find("desertbandit", 1, true) and "active" or "other"
+end
+local function noahNear(root)
+    if cachedNoah and cachedNoah.Parent then return cachedNoah end
+    if tick() - lastScan < 5 then return nil end
+    lastScan = tick()
+    local npcs = workspace:FindFirstChild("NPCs")
+    -- Search the NPC container only; never enumerate the whole world.
+    for _, model in ipairs(npcs and npcs:GetDescendants() or {}) do
+        if model:IsA("Model") then
+            local hum = model:FindFirstChildOfClass("Humanoid")
+            if normalize(model.Name) == "noah" or (hum and normalize(hum.DisplayName) == "noah") then
+                local part = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart", true)
+                if part and (part.Position - root.Position).Magnitude < 1500 then cachedNoah = model; return model end
+            end
+        end
+    end
+end
+local function choice(gui, expected)
+    for _, item in ipairs(gui:GetDescendants()) do
+        if (item:IsA("TextButton") or item:IsA("TextLabel")) and normalize(item.Text) == expected and visible(item, gui) then
+            local button = item:IsA("GuiButton") and item or item:FindFirstAncestorWhichIsA("GuiButton")
+            if button and visible(button, gui) and button.AbsoluteSize.X > 0 and button.AbsoluteSize.Y > 0 then return button end
+        end
+    end
+end
+function Q.Step()
+    if not Q.Enabled then return end
+    if game.PlaceId ~= 3978370137 then Q.Fail("Auto Quest currently supports Noah on Sandora in First Sea"); return end
+    if g.autofarm or g.TweenToPlayer or g.haki or g.AutoFishing or g.AutoMerchant or g.StartTweenIsland then
+        Q.Fail("Turn off other automatic travel/farm modes; keep your Desert Bandit Tween To NPC setting"); return
+    end
+    local player = game:GetService("Players").LocalPlayer
+    local char = player.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    local gui = player:FindFirstChild("PlayerGui")
+    if not root or not hum or hum.Health <= 0 or not gui then release(); Q.Status = "waiting to respawn"; return end
+    local state = questState(gui)
+    if state == "active" then
+        release()
+        Q.Status = "Desert Bandits quest active - using your existing NPC/M1 settings"
+        return
+    end
+    if state == "other" then Q.Fail("Another quest is active; finish or quit it first"); return end
+    if state == "unknown" then Q.Fail("Quest panel was not found; send the Auto Quest console message"); return end
+    local noah = noahNear(root)
+    local part = noah and (noah:FindFirstChild("HumanoidRootPart") or noah.PrimaryPart or noah:FindFirstChildWhichIsA("BasePart", true))
+    if not part then Q.Fail("Noah was not found in the nearby NPCs; stand beside him and try again"); return end
+    if not g.AutoQuestBusy then
+        g.AutoQuestBusy = true
+        if type(g.StopCurrentTween) == "function" then pcall(g.StopCurrentTween) end
+        Q.Status = "pausing NPC movement to collect the quest"
+        return -- Give the existing NPC loop one tick to release its movement.
+    end
+    if (part.Position - root.Position).Magnitude > 8 then
+        Q.Status = "returning to Noah"
+        travelStarted = travelStarted or tick()
+        if tick() - travelStarted > 30 then Q.Fail("Could not reach Noah within 30 seconds"); return end
+        local state = g.__TensenTweenState
+        if not state or not state.Enabled then
+            local move = g.__F2Tween and g.__F2Tween.TweenToCFrame or g.TweenToCFrame
+            if type(move) ~= "function" then Q.Fail("The NPC movement helper is not ready"); return end
+            travelRequested = true
+            move({CFrame = part.CFrame * CFrame.new(0, 0, -5), Speed = math.clamp(tonumber(g.TweenSpeedMaster) or 40, 5, 60),
+                WalkOnWater = false, Noclip = false, MaxTime = 15})
+        end
+        return
+    end
+    stopOwnTravel()
+    started = started or tick()
+    Q.Status = "accepting Noah's Desert Bandits quest"
+    if tick() - started > 25 then Q.Fail("Quest was not confirmed; accept Noah's quest manually and send the last Auto Quest status"); return end
+    if tick() - lastInput < 1.5 then return end
+    lastInput = tick()
+    local button = choice(gui, "alright") or choice(gui, "howcanihelp")
+    local input = game:GetService("VirtualInputManager")
+    if button then
+        local pos = button.AbsolutePosition + button.AbsoluteSize / 2
+        input:SendMouseButtonEvent(pos.X, pos.Y, 0, true, game, 0)
+        task.wait(0.05)
+        input:SendMouseButtonEvent(pos.X, pos.Y, 0, false, game, 0)
+    else
+        local prompt = noah:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if prompt and prompt.Enabled and type(fireproximityprompt) == "function" then fireproximityprompt(prompt)
+        else
+            local key = prompt and prompt.KeyboardKeyCode or Enum.KeyCode.T
+            input:SendKeyEvent(true, key, false, game)
+            task.wait(math.max(prompt and prompt.HoldDuration or 0, 0.1))
+            input:SendKeyEvent(false, key, false, game)
+        end
+    end
+end
+return Q
+
+end)()
+
 -- ============================================================================
 -- 2. Startup
 -- ============================================================================
@@ -24977,10 +25132,19 @@ Using a private server? Set your code and turn on Auto Join Private Server
 Private server travel needs teleport queue support]],
 			})
 
+            addStatus(Farm, "AutoQuest")
+            getgenv().__TensenAutoQuest.Toggle = Farm:AddToggle({
+                Name = "Auto Quest (Sandora)",
+                Description = "Return to Noah and repeat Desert Bandits. Use your working Tween To NPC and M1 settings. Enable manually each session.",
+                Default = false,
+                -- No persistence flag: this controller must not start from a saved config.
+                Callback = function(enabled) getgenv().__TensenAutoQuest.Set(enabled) end,
+            })
+
 			addStatus(Farm, "Farm")
 
 			Farm:AddToggle({
-				Name = "Auto Farm",
+				Name = "Auto Farm (Recovered Routes)",
 				Description = "Recovered routes: First Sea Fishman quest (190+), or Second Sea wolves. Early-level quests are missing.",
 				Default = getgenv().autofarm or false,
 				Flag = "AutoFarmToggle",
@@ -30357,7 +30521,12 @@ Private server travel needs teleport queue support]],
 
 				local statusFns = {}
 
-				statusFns.Farm = function(genv, root, humanoid)
+				statusFns.AutoQuest = function(genv)
+                    local q = genv.__TensenAutoQuest
+                    return q and q.Status or "off"
+                end
+
+                statusFns.Farm = function(genv, root, humanoid)
                     if not genv.autofarm and genv.FarmLastError then
                         return "stopped - " .. tostring(genv.FarmLastError)
                     end
@@ -37218,7 +37387,7 @@ Private server travel needs teleport queue support]],
 							return
 						end
 						local character = getgenv().Char()
-						if getgenv().combatPaused() then
+						if getgenv().AutoQuestBusy or getgenv().combatPaused() then
 							return
 						end
 						if not getgenv().equippedMelee(character) then
@@ -37298,7 +37467,7 @@ Private server travel needs teleport queue support]],
 							return
 						end
 						local character = getgenv().Char()
-						if getgenv().combatPaused() then
+						if getgenv().AutoQuestBusy or getgenv().combatPaused() then
 							return
 						end
 						local swords = ReplicatedStorage.Modules.SwordHandle.Swords
@@ -37447,7 +37616,7 @@ Private server travel needs teleport queue support]],
 					local running = false
 
 					startLoop("F2.TweenToNPC", 0.5, function()
-						local otherFarm = getgenv().autofarm
+						local otherFarm = getgenv().AutoQuestBusy or getgenv().autofarm
 							or getgenv().haki
 							or getgenv().AutoJuzoBoss
 							or getgenv().AutoMihawkBoss
