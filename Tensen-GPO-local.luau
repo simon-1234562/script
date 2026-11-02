@@ -30354,6 +30354,9 @@ Private server travel needs teleport queue support]],
 				local statusFns = {}
 
 				statusFns.Farm = function(genv, root, humanoid)
+                    if not genv.autofarm and genv.FarmLastError then
+                        return "stopped - " .. tostring(genv.FarmLastError)
+                    end
 					if not genv.autofarm then
 						return "off"
 					end
@@ -34638,11 +34641,30 @@ Private server travel needs teleport queue support]],
 					return nil
 				end
 
-				local function waitUntil(done, step)
-					repeat
-						task.wait(step)
-					until done() or stale()
-				end
+				local function waitUntil(done, step, timeout)
+                    local deadline = timeout and (tick() + timeout)
+                    repeat
+                        if done() then return true end
+                        if stale() then return false end
+                        if deadline and tick() >= deadline then return false end
+                        task.wait(step)
+                    until false
+                end
+
+                local function pauseFarm(reason)
+                    stopNow()
+                    tweenState.Enabled = false
+                    getgenv().autofarm = false
+                    getgenv().FarmLastError = reason
+                    getgenv().ForceNoClipReal = false
+                    warn("[Tensen Auto Farm] " .. reason)
+                    local ui = getgenv().TensenUILib
+                    if ui and type(ui.Notify) == "function" then
+                        pcall(function()
+                            ui:Notify({ Title = "Auto Farm stopped", Content = reason, Duration = 10 })
+                        end)
+                    end
+                end
 
 				-- alive character with a root part
 				local function alive()
@@ -34935,29 +34957,45 @@ Private server travel needs teleport queue support]],
 									continue
 								end
 
-								call("TweenToFishManIsland")
-
-								waitUntil(function()
-									return not (tweenState.Enabled ~= false and getgenv().autofarm and alive())
-								end)
-
-								if not getgenv().autofarm or not alive() then
-									continue
-								end
-
-								repeat
-									task.wait(0.2)
-
-									if not getgenv().autofarm or not alive() then
-										stopNow()
-										tweenState.Enabled = false
-										break
-									end
-								until fishmanIsland:FindFirstChild("Building") or stale()
-
-								if not (getgenv().autofarm and alive()) then
-									continue
-								end
+                                getgenv().FarmLastError = nil
+                                local travelOk, travelError = pcall(function()
+                                    local travel = getgenv().TweenToFishManIsland
+                                    assert(type(travel) == "function", "Fishman travel helper is missing")
+                                    travel()
+                                end)
+                                if not travelOk then
+                                    pauseFarm("Fishman travel failed: " .. tostring(travelError))
+                                    continue
+                                end
+                                local travelFinished = waitUntil(function()
+                                    return not tweenState.Enabled or not getgenv().autofarm or not alive()
+                                end, 0.1, 30)
+                                if not getgenv().autofarm or not alive() or stale() then
+                                    continue
+                                end
+                                if not travelFinished then
+                                    pauseFarm("Fishman travel did not finish within 30 seconds")
+                                    continue
+                                end
+                                -- Reacquire streamed instances on each check. A loaded island
+                                -- alone does not mean the character arrived at it.
+                                local arrived = waitUntil(function()
+                                    if not getgenv().autofarm or not alive() then return true end
+                                    local currentIslands = workspace:FindFirstChild("Islands")
+                                    local currentIsland = currentIslands and currentIslands:FindFirstChild("Fishman Island")
+                                    local currentBuilding = currentIsland and currentIsland:FindFirstChild("Building")
+                                    local currentCharacter = localPlayer.Character
+                                    local currentRoot = currentCharacter and currentCharacter:FindFirstChild("HumanoidRootPart")
+                                    return currentBuilding and currentRoot
+                                        and (currentRoot.Position - currentBuilding:GetPivot().Position).Magnitude <= 2000
+                                end, 0.2, 30)
+                                if not getgenv().autofarm or not alive() or stale() then
+                                    continue
+                                end
+                                if not arrived then
+                                    pauseFarm("Fishman entry was not confirmed within 30 seconds; the recovered route may be incomplete")
+                                    continue
+                                end
 
 								call("TweenFishmanSetSpawn")
 
