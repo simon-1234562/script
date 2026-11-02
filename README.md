@@ -18,3 +18,9 @@ Recovered Quest Routes (Advanced) and the other original farming features remain
 Full build compiles with official Luau 0.745. Isolated tests of the actual controller cover levels 9, 14, 20 and 500; current quest target matching; manual renewal pause/resume; mode switching; missing helpers; hidden quest panels; notification suppression; timeout and stop behavior. Tests of actual movement cleanup and toggle hit areas pass. All 153 original literal feature flags remain. No GPO execution was used for validation, so in-game quest acceptance and completion still require user testing.
 
 Noah, Desert Bandit, the active quest title/progress paths and Dialogue root were confirmed by supplied live diagnostic reports. Other automatic quest dialogue routes are not implemented. Original attribution remains in source. Destructive anti-tamper, UI presence/admin reporting, the loading splash and music player were removed. Executor-based automation has no ban-free guarantee.
+
+## Noah approach correction
+
+Quest-giver travel no longer supplies BossKey=NPC. That key allowed NPCOffsetY and NPCShuffle to override the intended quest interaction point. The target now lies up to three studs in front of Noah using his facing direction, at his root height. Quest travel disables combat shuffle/behind offsets, obstacle-climb steering and close-range snapping. Interaction requires both prompt-range proximity and a small vertical gap, then stops and removes the movement forces. Combat travel remains unchanged.
+
+The actual controller passes regression tests for a rotated Noah, zero vertical offset, no combat key, disabled climb/snap, capped approach speed and descending before interaction. The complete build compiles. GPO behavior still requires user testing.
