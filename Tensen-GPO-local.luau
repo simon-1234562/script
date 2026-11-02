@@ -13,7 +13,7 @@ end
 -- Compatibility aliases used by the recovered feature code.
 env.__TensenWF = writefile
 env.__TensenGC = getgc
-env.__YanusBuild = "noah-approach-v5"
+env.__YanusBuild = "noah-dialogue-v6"
 
 env.__TensenAutoQuest = (function()
 -- Quest-only controller. Idle until explicitly enabled; never auto-loaded from config.
@@ -29,6 +29,7 @@ function Q.Configure(mode, target)
 end
 local generation, cachedNoah, lastScan = 0, nil, -math.huge
 local priorNPCSettings = nil
+local lastChoiceButton, lastChoiceText, choiceAttempts = nil, nil, 0
 local started, lastInput, travelStarted, travelRequested = nil, -math.huge, nil, false
 local function normalize(text)
     return tostring(text or ""):lower():gsub("<[^>]*>", ""):gsub("[^%w]", "")
@@ -49,6 +50,7 @@ local function release()
     stopOwnTravel()
     g.AutoQuestBusy = false
     started = nil
+    lastChoiceButton, lastChoiceText, choiceAttempts = nil, nil, 0
 end
 function Q.Set(enabled)
     generation += 1
@@ -167,9 +169,49 @@ local function choice(gui, expected)
     for _, item in ipairs(dialogue and dialogue:GetDescendants() or {}) do
         if (item:IsA("TextButton") or item:IsA("TextLabel")) and normalize(item.Text) == expected and visible(item, gui) then
             local button = item:IsA("GuiButton") and item or item:FindFirstAncestorWhichIsA("GuiButton")
+            button = button or item -- some dialogue choices use a label inside an input frame
             if button and visible(button, gui) and button.AbsoluteSize.X > 0 and button.AbsoluteSize.Y > 0 then return button end
         end
     end
+end
+function Q.ClickChoice(button, label)
+    if button ~= lastChoiceButton or label ~= lastChoiceText then
+        lastChoiceButton, lastChoiceText, choiceAttempts = button, label, 0
+    end
+    choiceAttempts += 1
+    -- Prefer the existing handler for one click event. Never fire multiple
+    -- event types for the same choice, which could double-advance dialogue.
+    if choiceAttempts == 1 and type(getconnections) == "function" and button:IsA("GuiButton") then
+        for _, eventName in ipairs({"MouseButton1Click", "Activated"}) do
+            local got, connections = pcall(function() return getconnections(button[eventName]) end)
+            if got and type(connections) == "table" then
+                local fired = false
+                for _, connection in ipairs(connections) do
+                    local ok, dispatched = pcall(function()
+                        if connection.Enabled == false or type(connection.Fire) ~= "function" then return false end
+                        connection:Fire()
+                        return true
+                    end)
+                    fired = fired or (ok and dispatched)
+                end
+                if fired then return "button handler" end
+            end
+        end
+    end
+    -- Fallback: target the rendered choice, correcting for the GUI inset.
+    local pos = button.AbsolutePosition + button.AbsoluteSize / 2
+    local screen = button
+    while screen and not screen:IsA("ScreenGui") do screen = screen.Parent end
+    if screen and not screen.IgnoreGuiInset then
+        local ok, inset = pcall(function() return game:GetService("GuiService"):GetGuiInset() end)
+        if ok and inset then pos = pos + inset end
+    end
+    local input = game:GetService("VirtualInputManager")
+    pcall(function() input:SendMouseMoveEvent(pos.X, pos.Y, game) end)
+    input:SendMouseButtonEvent(pos.X, pos.Y, 0, true, game, 0)
+    task.wait(0.05)
+    input:SendMouseButtonEvent(pos.X, pos.Y, 0, false, game, 0)
+    return "screen click"
 end
 function Q.Step()
     if not Q.Enabled then return end
@@ -251,14 +293,13 @@ function Q.Step()
     if tick() - started > 25 then Q.Fail("Quest was not confirmed; accept Noah's quest manually and send the last Auto Quest status"); return end
     if tick() - lastInput < 1.5 then return end
     lastInput = tick()
-    local button = choice(gui, "alright") or choice(gui, "howcanihelp")
-    local input = game:GetService("VirtualInputManager")
+    local button, label = choice(gui, "alright"), "Alright!"
+    if not button then button, label = choice(gui, "howcanihelp"), "How can I help?" end
     if button then
-        local pos = button.AbsolutePosition + button.AbsoluteSize / 2
-        input:SendMouseButtonEvent(pos.X, pos.Y, 0, true, game, 0)
-        task.wait(0.05)
-        input:SendMouseButtonEvent(pos.X, pos.Y, 0, false, game, 0)
+        local method = Q.ClickChoice(button, label)
+        Q.Status = "Noah - selected " .. label .. " (" .. method .. ")"
     else
+        local input = game:GetService("VirtualInputManager")
         local prompt = noah:FindFirstChildWhichIsA("ProximityPrompt", true)
         if prompt and prompt.Enabled and type(fireproximityprompt) == "function" then fireproximityprompt(prompt)
         else
