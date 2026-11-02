@@ -33,10 +33,10 @@ Source SHA-256 (UTF-8 text normalized to LF): c245b52b3e672d47ca28761577827acb37
 UI source: https://raw.githubusercontent.com/LeviOnTopLOL/Halloween/refs/heads/main/oxideui.lua
 UI retrieval date: November 2, 2026.
 Downloaded UI SHA-256: ec6aa1dd775c0b6d755bb230e7ee0ec30b0b9319bd0548d7106bc627e35fa87a
-Bundled build SHA-256: 5cc6db07e88d4a84b21b8d83c55dc61feb89536ad84f6aea5b940a35103562d1
+Bundled build SHA-256: ff611f1f4bce449e709c59c9546bce7a610c2516f23bf1ba83469e4f4e67af54
 
 See VALIDATION.txt for checks.
 
-## Loader availability
+## First Sea autofarm correction
 
-This repository was private when uploaded. loader.luau uses an anonymous raw URL and will only work after the main script is publicly accessible. It contains no GitHub credentials.
+The First Sea recovery has only a Fishman quest branch; its existing quest condition requires level 190. It has no Sandora or other early-level quest selection despite the original UI description. Auto Farm now stops below that threshold with an explanation instead of attempting Fishman travel. This does not add low-level farming. Fishman arrival waits reacquire streamed instances, verify proximity and stop with a visible reason on timeout. Toggle state follows the stop. Functional GPO testing is still required.
