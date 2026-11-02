@@ -1,30 +1,20 @@
-# yanus hub: Sandora farming test
+# yanus hub: quest selector
 
-Rejoin for a fresh Roblox session. Run the normal loader from loader.luau, wait for the hub to finish loading, then enable the main Auto Farm control in the Auto Farm tab. The separate diagnostic scripts do not load movement or farming helpers. Keep Auto Load off while testing.
+Rejoin and run the normal loader from loader.luau. Keep Auto Load off while testing. In the Auto Farm tab, choose Quest, then enable Auto Farm. The new controls are not saved in configs and start off each session.
 
-The main control currently supports First Sea Sandora levels 10-19. It reads the level, chooses Desert Bandit, enables the existing NPC movement/M1 path, reads the active quest, and handles returning to Noah to accept the quest again. You no longer need to select the bandit or enable Tween To NPC separately. Your configured weapon setting is retained. Switching off restores the previous NPC selection and stops the NPC driver. The control starts off every session and is not persisted in configs.
+## Quest choices
 
-Confirmed from the supplied live diagnostic:
-- Noah: workspace.NPCs.Noah, with an interaction prompt.
-- Enemy model: workspace.NPCs['Desert Bandit'].
-- Active quest title: PlayerGui.Quest.Main.Info.Top.QuestName.
-- Progress: PlayerGui.Quest.Main.Info.Top.Progress, e.g. '0 / 7 Desert Bandit'.
-- PlayerGui.Dialogue is present. Dialogue choices still require in-game interaction verification.
+- Sandora - Desert Bandits (Noah): repeats Noah's quest automatically. Minimum level 10; no upper-level limit. Level 20 and higher can continue this quest. Selects Desert Bandit and uses the existing NPC/M1 settings.
+- Use current quest (accept manually): accept a kill quest in game, then enable Auto Farm. It matches the target NPC from Quest/Main/Info/Top/Progress, including simple plural names such as Marine(s). Available in First and Second Sea. NPCs must be loaded nearby. When the quest ends, movement and M1 pause while you manually accept another quest; then it resumes. Automatic acceptance/renewal for these other quests is not implemented.
 
-The normal quest reader ignores QuestTracker recommendations and hidden TrackedDaily objectives. When a quest is active, the existing NPC/M1 routines farm. When it ends, those routines pause while collecting the next quest. On reaching level 20, it stops before accepting another quest because the next island route is not implemented. This is not an all-level farming release.
+If matching fails, enter the exact internal NPC name in Quest enemy (optional). This overrides automatic enemy matching in current-quest mode. Changing the mode or override stops the running farm. Delivery and collection quests are not supported by NPC combat farming.
 
-Recovered Quest Routes (Advanced) and the other original farming modes remain separate. Keep conflicting travel/farm modes off during this test. The full simpler navigation and removal of unrelated PvP/trade controls are still pending. See REMOVALS.md for completed cleanup and restoration references.
+Stopping Auto Farm or Tween To NPC stops the NPC driver and releases its holding forces. STOP NPC MOVEMENT is also available. release-movement.luau is a separate recovery for an old stuck session. Repeated identical failure notifications are suppressed for 15 seconds; the status remains visible.
 
-## Validation
+Recovered Quest Routes (Advanced) and the other original farming features remain. Keep conflicting farm/travel modes off when using the main Auto Farm control. Full simplified navigation and removal of unrelated PvP/trade controls remain pending. See REMOVALS.md for the existing cleanup inventory.
 
-Official Luau 0.745 compiles the build. Isolated tests pass against the actual controller for the reported GUI hierarchy, progress display, automatic NPC selection/restoration, startup idle state, Noah prompt, dialogue choices, movement lock/release, timeouts, missing helpers, hidden quest panels and level boundaries. All 153 original literal feature flags remain. No GPO session was used to validate the new quest cycle; the user previously confirmed manual NPC tweening/M1 work.
+## Validation and limits
 
-The loading splash, music player, original default logo, promotional footer and an unused startup constructor have been removed. Original author attribution remains in source. Other recovered features may still be incomplete. Executor-based farming has no ban-free guarantee.
+Full build compiles with official Luau 0.745. Isolated tests of the actual controller cover levels 9, 14, 20 and 500; current quest target matching; manual renewal pause/resume; mode switching; missing helpers; hidden quest panels; notification suppression; timeout and stop behavior. Tests of actual movement cleanup and toggle hit areas pass. All 153 original literal feature flags remain. No GPO execution was used for validation, so in-game quest acceptance and completion still require user testing.
 
-## Movement-stop update
-
-The active movement engine now exports its own cleanup function. Turning off Auto Farm or Tween To NPC releases that engine instead of depending on the optional Big Mom module. Turning off manual NPC tweening also stops Auto Farm so it cannot keep ownership. Toggle rows accept clicks across the row, and startup refusal reasons appear as notifications. STOP NPC MOVEMENT is available in the farm controls.
-
-For a session already stuck on the old code, release-movement.luau stops NPC farming, disconnects its known movement updates, removes only known KD movement objects, and restores PlatformStand/AutoRotate. Rejoin afterward to load the new full build.
-
-Regression tests using the actual engine cleanup verify disconnecting updates, destroying movers, resetting character control, and repeat-stop behavior. Tests of the actual toggle implementation verify both row and pill clicks. Full build and recovery compile. These are isolated tests; GPO runtime verification remains necessary.
+Noah, Desert Bandit, the active quest title/progress paths and Dialogue root were confirmed by supplied live diagnostic reports. Other automatic quest dialogue routes are not implemented. Original attribution remains in source. Destructive anti-tamper, UI presence/admin reporting, the loading splash and music player were removed. Executor-based automation has no ban-free guarantee.
