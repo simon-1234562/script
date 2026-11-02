@@ -24981,11 +24981,17 @@ Private server travel needs teleport queue support]],
 
 			Farm:AddToggle({
 				Name = "Auto Farm",
-				Description = "Recovered routes: First Sea Fishman quest (190+), or Second Sea wolves. Early-level quests are missing.",
+				Description = "Sandora Desert Bandits below 190 (start beside Noah); recovered Fishman route at 190+, or Second Sea wolves. Other early-level quests are not implemented.",
 				Default = getgenv().autofarm or false,
 				Flag = "AutoFarmToggle",
                 Callback = function(enabled)
-                    if enabled then getgenv().FarmLastError = nil end
+                    if enabled then
+                        getgenv().FarmLastError = nil
+                        getgenv().SandoraFarmStatus = nil
+                    else
+                        getgenv().SandoraCombatActive = false
+                        getgenv().SandoraTargetName = nil
+                    end
                     getgenv().autofarm = enabled
                     autosave()
                 end,
@@ -30219,6 +30225,7 @@ Private server travel needs teleport queue support]],
 									or lowered:find("law")
 									or child.Name == "Donmingo Family"
 									or child.Name == "Fishman Karate User"
+                                    or (getgenv().autofarm and getgenv().SandoraCombatActive and child.Name == getgenv().SandoraTargetName)
 									or child.Name == "Yeti"
 									or child.Name == "Crazy Wolf"
 									or child.Name == "Juzo the Diamondback"
@@ -30398,6 +30405,10 @@ Private server travel needs teleport queue support]],
 					if yetiQuest then
 						return "paused - Auto Haki is doing the Yeti quest"
 					end
+
+                    if placeId == 3978370137 and level < 190 then
+                        return genv.SandoraFarmStatus or "Sandora - starting (stand beside Noah)"
+                    end
 
 					-- the real Y threshold isn't known, uses FishmanInsideY if set, otherwise skips the check
 					local fishmanY = genv.FishmanInsideY
@@ -34731,6 +34742,215 @@ Private server travel needs teleport queue support]],
 					return call("Level")
 				end
 
+                local sandora = (function()
+-- Sandora adapter: uses observed NPC/enemy names and visible dialogue.
+-- Does not guess an internal quest identifier or hard-code island coordinates.
+local Sandora = { status = "Sandora - starting", targetName = nil }
+local cachedNoah, lastScan = nil, -math.huge
+local dialogueSince, lastInteract, lastClick = nil, -math.huge, -math.huge
+local movingTarget, nextStep = nil, 0
+local function normalize(text)
+    return string.lower(tostring(text or "")):gsub("<[^>]*>", ""):gsub("[^%w]", "")
+end
+local function rootOf(model)
+    return model and (model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart", true))
+end
+local function myRoot()
+    return localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
+end
+local function visible(instance)
+    local node = instance
+    while node and node ~= localPlayer.PlayerGui do
+        if node:IsA("GuiObject") and not node.Visible then return false end
+        if node:IsA("ScreenGui") and not node.Enabled then return false end
+        node = node.Parent
+    end
+    return node == localPlayer.PlayerGui
+end
+local function questState()
+    local gui = localPlayer:FindFirstChild("PlayerGui")
+    local quest = gui and gui:FindFirstChild("Quest")
+    local main = quest and quest:FindFirstChild("Main")
+    if not main or not visible(main) then return "none" end
+    local lines = {}
+    for _, item in ipairs(main:GetDescendants()) do
+        if (item:IsA("TextLabel") or item:IsA("TextButton")) and visible(item) then
+            lines[#lines + 1] = item.Text
+        end
+    end
+    local text = table.concat(lines, " ")
+    if normalize(text):find("desertbandit", 1, true) then
+        return "desert", text
+    end
+    return "other", text
+end
+local function named(model, expected)
+    if normalize(model.Name) == expected then return true end
+    local humanoid = model:FindFirstChildOfClass("Humanoid")
+    return humanoid and normalize(humanoid.DisplayName) == expected
+end
+local function findNoah(root)
+    if cachedNoah and cachedNoah.Parent and rootOf(cachedNoah) then return cachedNoah end
+    if tick() - lastScan < 5 then return nil end
+    lastScan = tick()
+    local nearest, distance = nil, 1500
+    for _, item in ipairs(workspace:GetDescendants()) do
+        if item:IsA("Model") and named(item, "noah") and not game:GetService("Players"):GetPlayerFromCharacter(item) then
+            local part = rootOf(item)
+            if part then
+                local d = (part.Position - root.Position).Magnitude
+                if d < distance then nearest, distance = item, d end
+            end
+        end
+    end
+    cachedNoah = nearest
+    return nearest
+end
+local function nearestBandit(root)
+    local npcs = workspace:FindFirstChild("NPCs")
+    local nearest, distance = nil, 1500
+    for _, item in ipairs(npcs and npcs:GetChildren() or {}) do
+        if item:IsA("Model") and named(item, "desertbandit") then
+            local humanoid, part = item:FindFirstChildOfClass("Humanoid"), rootOf(item)
+            if humanoid and humanoid.Health > 0 and part then
+                local d = (part.Position - root.Position).Magnitude
+                if d < distance then nearest, distance = item, d end
+            end
+        end
+    end
+    return nearest, distance
+end
+local function movement(name)
+    local engine = getgenv().__F2Tween
+    return (engine and engine[name]) or getgenv()[name]
+end
+local function stopMovement()
+    if movingTarget then stopNow(); tweenState.Enabled = false end
+    movingTarget = nil
+end
+local function clearCombat()
+    getgenv().SandoraCombatActive = false
+    getgenv().SandoraTargetName = nil
+    Sandora.targetName = nil
+end
+local function findChoice(expected)
+    local gui = localPlayer:FindFirstChild("PlayerGui")
+    for _, item in ipairs(gui and gui:GetDescendants() or {}) do
+        if (item:IsA("TextButton") or item:IsA("TextLabel")) and normalize(item.Text) == expected and visible(item) then
+            local button = item:IsA("GuiButton") and item or item:FindFirstAncestorWhichIsA("GuiButton")
+            if button and visible(button) and button.AbsoluteSize.X > 0 and button.AbsoluteSize.Y > 0 then return button end
+        end
+    end
+end
+local function click(button)
+    -- Prefer one real UI click so the game's own dialogue code chooses its quest id.
+    local input = game:GetService("VirtualInputManager")
+    local point = button.AbsolutePosition + button.AbsoluteSize / 2
+    input:SendMouseButtonEvent(point.X, point.Y, 0, true, game, 0)
+    task.wait(0.05)
+    input:SendMouseButtonEvent(point.X, point.Y, 0, false, game, 0)
+end
+local function interact(noah)
+    local prompt = noah:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if prompt and prompt.Enabled and type(fireproximityprompt) == "function" then
+        fireproximityprompt(prompt)
+        return
+    end
+    local key = prompt and prompt.KeyboardKeyCode or Enum.KeyCode.T
+    local input = game:GetService("VirtualInputManager")
+    input:SendKeyEvent(true, key, false, game)
+    task.wait(math.max(prompt and prompt.HoldDuration or 0, 0.1))
+    input:SendKeyEvent(false, key, false, game)
+end
+function Sandora.Reset()
+    clearCombat()
+    dialogueSince = nil
+    stopMovement()
+end
+function Sandora.Step()
+    if tick() < nextStep then return end
+    nextStep = tick() + 0.25
+    local root = myRoot()
+    if not root then return end
+    local state, text = questState()
+    if state == "other" then
+        Sandora.Reset()
+        pauseFarm("Another quest is active. Finish or quit it, take Noah's Desert Bandits quest, then enable Auto Farm")
+        return
+    end
+    if state == "desert" then
+        dialogueSince = nil
+        local bandit = nearestBandit(root)
+        if not bandit then
+            clearCombat(); stopMovement()
+            Sandora.status = "Sandora - waiting for Desert Bandits to spawn"
+            return
+        end
+        local done, needed = tostring(text):match("(%d+)%s*/%s*(%d+)")
+        if done and tonumber(done) >= tonumber(needed) then
+            clearCombat(); stopMovement()
+            Sandora.status = "Sandora - waiting for quest completion"
+            return
+        end
+        getgenv().SandoraCombatActive = true
+        getgenv().SandoraTargetName = bandit.Name
+        Sandora.targetName = bandit.Name
+        Sandora.status = "Sandora - fighting Desert Bandits" .. (done and (" (" .. done .. "/" .. needed .. ")") or "")
+        if movingTarget ~= bandit or not tweenState.Enabled then
+            stopMovement()
+            local move = movement("TweenToMob")
+            assert(type(move) == "function", "Sandora movement helper is missing")
+            move({MobName = bandit.Name, Container = bandit.Parent,
+                Speed = math.clamp(tonumber(getgenv().TweenSpeedMaster) or 40, 5, 60),
+                Offset = Vector3.new(0, 3, 3), WalkOnWater = false, MaxTime = 20})
+            movingTarget = bandit
+        end
+        return
+    end
+    clearCombat()
+    local noah = findNoah(root)
+    local part = rootOf(noah)
+    if not part then
+        Sandora.Reset()
+        pauseFarm("Noah was not found nearby. Stand beside Noah on Sandora, or take his Desert Bandits quest manually, then enable Auto Farm")
+        return
+    end
+    if (part.Position - root.Position).Magnitude > 8 then
+        dialogueSince = nil
+        Sandora.status = "Sandora - approaching Noah"
+        if movingTarget ~= noah or not tweenState.Enabled then
+            stopMovement()
+            local move = movement("TweenToCFrame")
+            assert(type(move) == "function", "Sandora movement helper is missing")
+            move({CFrame = part.CFrame * CFrame.new(0, 0, -5), Speed = 40,
+                WalkOnWater = false, Noclip = false, MaxTime = 15})
+            movingTarget = noah
+        end
+        return
+    end
+    stopMovement()
+    dialogueSince = dialogueSince or tick()
+    Sandora.status = "Sandora - accepting Noah's quest"
+    if tick() - dialogueSince > 25 then
+        Sandora.Reset()
+        pauseFarm("Noah's quest was not confirmed. Accept it manually and enable Auto Farm; send the console error if combat also fails")
+        return
+    end
+    if tick() - lastClick < 1 then return end
+    local accept = findChoice("alright")
+    local help = findChoice("howcanihelp")
+    if accept or help then
+        click(accept or help)
+        lastClick = tick()
+    elseif tick() - lastInteract >= 2 then
+        interact(noah)
+        lastInteract = tick()
+    end
+end
+return Sandora
+
+                end)()
+
 				local function umiBossEngaged()
 					return game.PlaceId == SECOND_SEA
 						and (getgenv().AutoRogerBoss or getgenv().AutoMihawkBoss)
@@ -34903,11 +35123,16 @@ Private server travel needs teleport queue support]],
 							continue
 						end
 
-                        -- The recovery contains no early-level First Sea quest selection.
-                        -- 190 is the threshold used by its existing Becky quest branch.
                         if game.PlaceId == FIRST_SEA and myLevel < 190 then
-                            pauseFarm("First Sea Auto Farm only has a recovered Fishman quest route (190+); Sandora and other early-level quests are missing")
+                            local ok, err = pcall(sandora.Step)
+                            getgenv().SandoraFarmStatus = sandora.status
+                            if not ok then
+                                pcall(sandora.Reset)
+                                pauseFarm("Sandora error: " .. tostring(err))
+                            end
                             continue
+                        elseif getgenv().SandoraCombatActive then
+                            sandora.Reset()
                         end
 
 						local hasHaki = call("hasBusoHaki")
@@ -35782,6 +36007,7 @@ Private server travel needs teleport queue support]],
 									or name:find("law")
 									or child.Name == "Donmingo Family"
 									or child.Name == "Fishman Karate User"
+                                    or (getgenv().autofarm and getgenv().SandoraCombatActive and child.Name == getgenv().SandoraTargetName)
 									or child.Name == "Yeti"
 									or child.Name == "Crazy Wolf"
 									or child.Name == "Juzo the Diamondback"
