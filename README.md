@@ -1,14 +1,21 @@
-# Tensen GPO recovery: Sandora test rolled back
+# Tensen GPO: Auto Quest (Sandora)
 
-The Sandora adapter was removed after the user reported Roblox crashes. The cause is not yet established. Do not treat compilation or isolated tests as proof that this runs safely in GPO or with a particular executor.
+Start in a fresh Roblox session and run loader.luau. Start beside Noah on Sandora, or with his Desert Bandits quest active. Keep Auto Farm (Recovered Routes) off. Use your working Tween To NPC / selected Desert Bandit and M1/weapon settings, then enable Auto Quest (Sandora) in the Auto Farm tab.
 
-The public loader currently serves the earlier guarded recovery. Below level 190 in First Sea, Auto Farm stops with an explanation instead of starting the recovered Fishman route. Sandora farming is not available in this version. Recovered higher-level features remain incomplete and unverified in-game.
+While the Desert Bandits quest is active, Auto Quest leaves your existing combat settings in control. When no quest is active, it pauses NPC chasing and the shared M1 loops, returns to a nearby Noah, opens his dialogue, and clicks 'How can I help?' then 'Alright!'. Confirming the quest releases the lock and resumes the existing NPC movement/combat.
 
-The rollback preserves the earlier cleanup: destructive anti-tamper code removed, UI bundled locally, UI registration and remote admin kick system removed, and the Fishman arrival wait bounded. All 153 original literal feature flag declarations and original credits remain. Right Shift toggles the UI.
+The new toggle starts off each session and is not saved in configs. No controller loop or scan starts before manual enabling. Only the NPC container is searched for Noah; the controller never enumerates the whole world. Selected NPC, weapon and Tween To NPC settings are preserved. Other automatic travel modes must be off.
 
-Crash diagnosis needs the trigger: loader execution, enabling Auto Farm, movement, or combat; and whether Roblox closes, freezes, or shows an error/disconnect message. Repeated execution in one session can leave old background loops running. Do not repeatedly rerun the crashing test build.
+Supports only Noah's Sandora Desert Bandits quest. Other active quests, missing Noah, travel failure and dialogue failure produce an explanatory stop. It uses the recovery's PlayerGui.Quest.Main hierarchy, which still needs in-game confirmation. If dialogue fails, accept the quest manually and enable Auto Quest again. Right Shift toggles the hub unless a saved keybind overrides it.
 
-Validation: the rollback compiles with official Luau 0.745. It is the same guarded version that preceded the Sandora adapter, not a demonstrated crash fix. No GPO functional test has been performed by the assistant.
+## Validation and limits
 
-Original hub input: user-provided tesenrecover.txt.
-Original UI source: https://raw.githubusercontent.com/LeviOnTopLOL/Halloween/refs/heads/main/oxideui.lua
+Full build compiles with official Luau 0.745. Isolated tests using the actual controller pass for idle startup, preserving NPC settings, movement lock/release, Noah prompt, both dialogue choices, conflicting quest, missing NPC, travel/dialogue timeouts and disabling cleanup. No GPO execution was used for these tests. The user has confirmed existing NPC tweening/M1 work and the rolled-back hub can remain open. The new quest controller still needs in-game testing.
+
+The earlier combined Sandora farm adapter remains rolled back after reported crashes. The compile-only diagnostic passed; the intermittent startup shutdown cause is unconfirmed. Separate diagnose.luau and diagnose-ui.luau tools remain available.
+
+All 153 original feature flags and original credits remain. Recovered higher-level routes and other gameplay still contain missing/approximated code. The destructive initial anti-tamper and UI presence/admin kick/HTTP interception were removed. Normal config management and the optional user-configured fruit webhook remain. The executor executable has not been audited.
+
+Original input: user-provided tesenrecover.txt.
+UI source: https://raw.githubusercontent.com/LeviOnTopLOL/Halloween/refs/heads/main/oxideui.lua
+Build SHA-256: 4fbdac62f5f40e21926b205b3869833e60f2449c1c2aee1da4c6992f2051cfb5
