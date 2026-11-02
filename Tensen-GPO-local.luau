@@ -13,7 +13,7 @@ end
 -- Compatibility aliases used by the recovered feature code.
 env.__TensenWF = writefile
 env.__TensenGC = getgc
-env.__YanusBuild = "noah-dialogue-v6"
+env.__YanusBuild = "npcchat-dialogue-v7"
 
 env.__TensenAutoQuest = (function()
 -- Quest-only controller. Idle until explicitly enabled; never auto-loaded from config.
@@ -165,7 +165,9 @@ local function noahNear(root)
     end
 end
 local function choice(gui, expected)
-    local dialogue = gui:FindFirstChild("Dialogue")
+    -- Noah's live dialogue uses NPCCHAT; Dialogue is a different, disabled UI.
+    local dialogue = gui:FindFirstChild("NPCCHAT")
+    if not dialogue or not visible(dialogue, gui) then dialogue = gui:FindFirstChild("Dialogue") end
     for _, item in ipairs(dialogue and dialogue:GetDescendants() or {}) do
         if (item:IsA("TextButton") or item:IsA("TextLabel")) and normalize(item.Text) == expected and visible(item, gui) then
             local button = item:IsA("GuiButton") and item or item:FindFirstAncestorWhichIsA("GuiButton")
@@ -299,6 +301,11 @@ function Q.Step()
         local method = Q.ClickChoice(button, label)
         Q.Status = "Noah - selected " .. label .. " (" .. method .. ")"
     else
+        local chat = gui:FindFirstChild("NPCCHAT")
+        if chat and visible(chat, gui) then
+            Q.Status = "Noah - waiting for dialogue choices"
+            return -- Do not restart an open conversation while its text is appearing.
+        end
         local input = game:GetService("VirtualInputManager")
         local prompt = noah:FindFirstChildWhichIsA("ProximityPrompt", true)
         if prompt and prompt.Enabled and type(fireproximityprompt) == "function" then fireproximityprompt(prompt)
