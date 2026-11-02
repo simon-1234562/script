@@ -13,12 +13,20 @@ end
 -- Compatibility aliases used by the recovered feature code.
 env.__TensenWF = writefile
 env.__TensenGC = getgc
-env.__YanusBuild = "sandora-stop-v3"
+env.__YanusBuild = "quest-select-v4"
 
 env.__TensenAutoQuest = (function()
 -- Quest-only controller. Idle until explicitly enabled; never auto-loaded from config.
 local g = getgenv()
-local Q = { Enabled = false, Status = "off" }
+local Q = { Enabled = false, Status = "off", Mode = "Sandora - Desert Bandits (Noah)", TargetOverride = "" }
+Q.Modes = { "Sandora - Desert Bandits (Noah)", "Use current quest (accept manually)" }
+local lastFailure, lastFailureTime = nil, -math.huge
+function Q.Configure(mode, target)
+    if Q.Enabled then Q.Set(false); if Q.Toggle then Q.Toggle:Set(false) end end
+    if mode then Q.Mode = mode end
+    if target ~= nil then Q.TargetOverride = tostring(target):match("^%s*(.-)%s*$") end
+    Q.Status = "off - " .. Q.Mode
+end
 local generation, cachedNoah, lastScan = 0, nil, -math.huge
 local priorNPCSettings = nil
 local started, lastInput, travelStarted, travelRequested = nil, -math.huge, nil, false
@@ -61,8 +69,8 @@ function Q.Set(enabled)
     local ok, level = pcall(g.Level)
     level = ok and tonumber(level) or nil
     if not level then Q.Fail("Could not read your character level from the HUD"); return end
-    if level < 10 or level >= 20 then
-        Q.Fail("The verified quest route currently covers Sandora levels 10-19; other routes are not implemented yet")
+    if Q.Mode == Q.Modes[1] and level < 10 then
+        Q.Fail("Noah's Desert Bandits quest requires level 10 or above")
         return
     end
     if g.autofarm then
@@ -70,7 +78,14 @@ function Q.Set(enabled)
         return
     end
     priorNPCSettings = {enabled = g.TweenToNPC, selected = g.SelectedNPC}
-    g.SelectedNPC = "Desert Bandit"
+    local target = "Desert Bandit"
+    if Q.Mode == Q.Modes[2] then
+        local data, errorKind = Q.ReadQuest()
+        if not data then Q.Fail("Accept the quest you want to farm first (" .. tostring(errorKind) .. ")"); return end
+        target = Q.ResolveTarget(data.progress)
+        if not target then Q.Fail("Could not match the quest enemy. Enter its exact NPC name in Quest enemy (optional)"); return end
+    end
+    g.SelectedNPC = target
     g.TweenToNPC = true
     local token = generation
     task.spawn(function()
@@ -84,29 +99,52 @@ end
 function Q.Fail(reason)
     Q.Set(false)
     Q.Status = "stopped - " .. reason
-    warn("[Auto Quest] " .. reason)
-    local ui = g.TensenUILib
-    if ui and type(ui.Notify) == "function" then
-        pcall(function() ui:Notify({Title = "Auto Farm could not start", Content = reason, Duration = 12}) end)
+    local showFailure = reason ~= lastFailure or tick() - lastFailureTime >= 15
+    if showFailure then
+        lastFailure, lastFailureTime = reason, tick()
+        warn("[Auto Quest] " .. reason)
+        local ui = g.TensenUILib
+        if ui and type(ui.Notify) == "function" then
+            pcall(function() ui:Notify({Title = "Auto Farm stopped", Content = reason, Duration = 6}) end)
+        end
     end
     if Q.Toggle and type(Q.Toggle.Set) == "function" then pcall(function() Q.Toggle:Set(false) end) end
     -- Keep the reason visible even when the toggle's callback runs.
     Q.Status = "stopped - " .. reason
 end
-local function questState(gui)
-    local quest = gui:FindFirstChild("Quest")
+function Q.ReadQuest()
+    local player = game:GetService("Players").LocalPlayer
+    local gui = player:FindFirstChild("PlayerGui")
+    local quest = gui and gui:FindFirstChild("Quest")
     local main = quest and quest:FindFirstChild("Main")
     local info = main and main:FindFirstChild("Info")
     local top = info and info:FindFirstChild("Top")
     local nameLabel = top and top:FindFirstChild("QuestName")
     local progressLabel = top and top:FindFirstChild("Progress")
-    if not main or not info or not nameLabel or not progressLabel then return "unknown" end
-    -- Daily tracked objectives and recommended quests are separate UI branches.
-    if not visible(info, gui) then return "none" end
-    if normalize(nameLabel.Text):find("desertbandit", 1, true) then
-        return "active", progressLabel.Text
+    if not main or not info or not nameLabel or not progressLabel then return nil, "quest panel missing" end
+    if not visible(info, gui) then return nil, "no active quest" end
+    return {title = nameLabel.Text, progress = progressLabel.Text}
+end
+function Q.ResolveTarget(progress)
+    local npcs = workspace:FindFirstChild("NPCs")
+    local explicit = Q.TargetOverride ~= "" and Q.TargetOverride or nil
+    local wanted = tostring(progress or ""):match("%d+%s*/%s*%d+%s*(.+)")
+    local key = wanted and normalize(wanted:gsub("%(s%)", "")):gsub("s$", "")
+    for _, model in ipairs(npcs and npcs:GetChildren() or {}) do
+        if model:IsA("Model") and model:FindFirstChildOfClass("Humanoid") then
+            if explicit and model.Name == explicit then return model.Name end
+            if not explicit and key and normalize(model.Name):gsub("s$", "") == key then return model.Name end
+        end
     end
-    return "other"
+    return nil
+end
+local function questState()
+    local data, reason = Q.ReadQuest()
+    if not data then return reason == "no active quest" and "none" or "unknown" end
+    if Q.Mode == Q.Modes[2] or normalize(data.title):find("desertbandit", 1, true) then
+        return "active", data.progress
+    end
+    return "other", data.progress
 end
 local function noahNear(root)
     if cachedNoah and cachedNoah.Parent then return cachedNoah end
@@ -135,7 +173,10 @@ local function choice(gui, expected)
 end
 function Q.Step()
     if not Q.Enabled then return end
-    if game.PlaceId ~= 3978370137 then Q.Fail("Auto Quest currently supports Noah on Sandora in First Sea"); return end
+    if (Q.Mode == Q.Modes[1] and game.PlaceId ~= 3978370137)
+        or (Q.Mode == Q.Modes[2] and game.PlaceId ~= 3978370137 and game.PlaceId ~= 7465136166) then
+        Q.Fail("The selected mode is not supported in this place"); return
+    end
     if g.autofarm or g.TweenToPlayer or g.haki or g.AutoFishing or g.AutoMerchant or g.StartTweenIsland then
         Q.Fail("Turn off other automatic travel/farm modes; keep your Desert Bandit Tween To NPC setting"); return
     end
@@ -145,17 +186,28 @@ function Q.Step()
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     local gui = player:FindFirstChild("PlayerGui")
     if not root or not hum or hum.Health <= 0 or not gui then release(); Q.Status = "waiting to respawn"; return end
-    local state, progress = questState(gui)
+    local state, progress = questState()
     if state == "active" then
+        if Q.Mode == Q.Modes[2] then
+            local target = Q.ResolveTarget(progress)
+            if not target then Q.Fail("Quest enemy not found nearby; enter the exact name in Quest enemy (optional)"); return end
+            if g.SelectedNPC ~= target then
+                if type(g.StopCurrentTween) == "function" then pcall(g.StopCurrentTween) end
+                g.SelectedNPC = target
+            end
+        end
         release()
-        Q.Status = "Sandora - Desert Bandits " .. tostring(progress or "")
+        Q.Status = g.SelectedNPC .. " - " .. tostring(progress or "")
         return
     end
     if state == "other" then Q.Fail("Another quest is active; finish or quit it first"); return end
     if state == "unknown" then Q.Fail("Quest panel was not found; send the Auto Quest console message"); return end
-    local readOk, currentLevel = pcall(g.Level)
-    if readOk and tonumber(currentLevel) and tonumber(currentLevel) >= 20 then
-        Q.Fail("Reached level 20. The next island quest route is not implemented yet; your previous NPC settings were restored")
+    if Q.Mode == Q.Modes[2] then
+        if not g.AutoQuestBusy then
+            g.AutoQuestBusy = true
+            if type(g.StopCurrentTween) == "function" then pcall(g.StopCurrentTween) end
+        end
+        Q.Status = "Quest finished - accept another quest manually to continue"
         return
     end
     local noah = noahNear(root)
@@ -24874,9 +24926,25 @@ Private server travel needs teleport queue support]],
                     if type(env.StopCurrentTween) == "function" then env.StopCurrentTween() end
                 end,
             })
+            Farm:AddDropdown({
+                Name = "Quest",
+                Description = "Choose Noah's repeat quest, or farm a quest you accept yourself.",
+                Options = getgenv().__TensenAutoQuest.Modes,
+                Default = getgenv().__TensenAutoQuest.Mode,
+                Callback = function(value)
+                    if type(value) == "table" then value = value[1] end
+                    if table.find(getgenv().__TensenAutoQuest.Modes, value) then getgenv().__TensenAutoQuest.Configure(value) end
+                end,
+            })
+            Farm:AddInput({
+                Name = "Quest enemy (optional)",
+                Description = "For current-quest mode: exact NPC name if automatic matching fails.",
+                Default = "", Placeholder = "Auto from quest progress",
+                Callback = function(value) getgenv().__TensenAutoQuest.Configure(nil, value) end,
+            })
             getgenv().__TensenAutoQuest.Toggle = Farm:AddToggle({
                 Name = "Auto Farm",
-                Description = "Sandora levels 10-19: collect Noah's quest, select Desert Bandits, farm them, and repeat. Enable manually each session.",
+                Description = "Farm the selected quest. Noah repeats automatically at level 10+; current-quest mode waits for you to accept each quest.",
                 Default = false,
                 -- No persistence flag: this controller must not start from a saved config.
                 Callback = function(enabled) getgenv().__TensenAutoQuest.Set(enabled) end,
