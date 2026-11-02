@@ -1,3 +1,5 @@
+-- yanus hub: original hub by ttaapper & yaoei; original Oxidelib UI attribution retained.
+-- Cleanup and quest integration changes documented in REMOVALS.md.
 -- Tensen GPO: local cleanup of the supplied recovery file.
 -- Original credits retained. No claim of complete gameplay recovery.
 -- UI bundled locally; no remote UI code is downloaded or executed.
@@ -78,7 +80,7 @@ local function noahNear(root)
     lastScan = tick()
     local npcs = workspace:FindFirstChild("NPCs")
     -- Search the NPC container only; never enumerate the whole world.
-    for _, model in ipairs(npcs and npcs:GetDescendants() or {}) do
+    for _, model in ipairs(npcs and npcs:GetChildren() or {}) do
         if model:IsA("Model") then
             local hum = model:FindFirstChildOfClass("Humanoid")
             if normalize(model.Name) == "noah" or (hum and normalize(hum.DisplayName) == "noah") then
@@ -131,11 +133,12 @@ function Q.Step()
         if tick() - travelStarted > 30 then Q.Fail("Could not reach Noah within 30 seconds"); return end
         local state = g.__TensenTweenState
         if not state or not state.Enabled then
-            local move = g.__F2Tween and g.__F2Tween.TweenToCFrame or g.TweenToCFrame
+            local move = g.TweenToMob2 or (g.__F2Tween and g.__F2Tween.TweenToMob2)
             if type(move) ~= "function" then Q.Fail("The NPC movement helper is not ready"); return end
             travelRequested = true
-            move({CFrame = part.CFrame * CFrame.new(0, 0, -5), Speed = math.clamp(tonumber(g.TweenSpeedMaster) or 40, 5, 60),
-                WalkOnWater = false, Noclip = false, MaxTime = 15})
+            move({MobName = noah.Name, Container = noah.Parent, BossKey = "NPC",
+                Offset = Vector3.new(0, 0, -5), Speed = math.clamp(tonumber(g.TweenSpeedMaster) or 40, 5, 60),
+                WalkOnWater = false, MaxTime = 15})
         end
         return
     end
@@ -19882,7 +19885,7 @@ do
 			local ok, result = pcall(initBigMom)
 
 			if not ok then
-				hubLog("[Tensen] The Big Mom module stopped with an error: " .. tostring(result))
+				hubLog("[yanus] The Big Mom module stopped with an error: " .. tostring(result))
 			end
 
 			if not running or count ~= runId then
@@ -21455,7 +21458,7 @@ local TextService      = game:GetService("TextService")
 local HttpService      = game:GetService("HttpService")
 local Workspace        = game:GetService("Workspace")
 
-local DEFAULT_LOGO = "rbxassetid://114345069590059"
+local DEFAULT_LOGO = "" -- original decorative logo removed
 local TWEEN = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local NOTIFICATION_TWEEN = TweenInfo.new(0.18, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
 local PROFILE_TWEEN = TweenInfo.new(0.32, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
@@ -22208,329 +22211,9 @@ end
 -- MUSIC PLAYER BUILDER (kept as its own function so its locals do not count
 -- against CreateWindow's Luau local-register budget)
 -- ════════════════════════════════════════════════════════════════════════════
-local function buildMusicPlayer(cfg)
-    local screenGui      = cfg.screenGui
-    local profileWidth   = cfg.profileWidth
-    local bottomMargin   = cfg.bottomMargin
-    local panelGap       = cfg.panelGap
-    local musicToggleBtn = cfg.toggleBtn
-    local musicToggleIcon= cfg.toggleIcon
-    local musicConns     = cfg.conns
-    local opts           = cfg.opts or {}
-
-    local CLOSE_RED      = Color3.fromRGB(190, 60, 60)
-    local CLOSE_RED_HI   = Color3.fromRGB(212, 80, 80)
-    local MIN_YELLOW     = Color3.fromRGB(255, 195, 0)
-    local MIN_YELLOW_HI  = Color3.fromRGB(255, 211, 70)
-    local MUSIC_FOLDER   = tostring(opts.MusicFolder or "OxidelibMusic")
-    local musicWidth     = profileWidth
-    local fullHeight     = 384
-    local compactHeight  = 190
-    local profilePanelH  = 382
-    local musicOpenPos   = UDim2.new(1, -18, 1, -(bottomMargin + profilePanelH + panelGap))
-    local musicClosedPos = UDim2.new(1, musicWidth + 28, 1, -(bottomMargin + profilePanelH + panelGap))
-    local musicOpen      = false
-    local minimized      = false
-
-    -- 2D audio playback via SoundService
-    local SoundService = game:GetService("SoundService")
-    local musicSound   = Instance.new("Sound")
-    musicSound.Name   = "OxidelibMusicPlayer"
-    musicSound.Volume = 0.5
-    musicSound.Looped = false
-    pcall(function() musicSound.Parent = SoundService end)
-
-    -- Filesystem / asset capabilities (guarded for non-executor environments)
-    local fsList       = (typeof(listfiles) == "function") and listfiles or nil
-    local fsIsFolder   = (typeof(isfolder) == "function") and isfolder or nil
-    local fsMakeFolder = (typeof(makefolder) == "function") and makefolder or nil
-    local assetLoader  = (typeof(getcustomasset) == "function" and getcustomasset)
-        or (typeof(getsynasset) == "function" and getsynasset) or nil
-    if fsMakeFolder and fsIsFolder and not fsIsFolder(MUSIC_FOLDER) then
-        pcall(fsMakeFolder, MUSIC_FOLDER)
-    end
-
-    local tracks       = {}
-    local currentIndex = 0
-    local isPlaying    = false
-    local function baseName(p)
-        local n = string.match(tostring(p), "[^/\\]+$") or tostring(p)
-        return (string.gsub(n, "%.[%w]+$", ""))
-    end
-    local function fmtTime(t)
-        t = math.max(0, math.floor(t or 0))
-        return string.format("%d:%02d", math.floor(t / 60), t % 60)
-    end
-
-    -- ── Panel shell (compact, matches the profile / performance panels) ─────
-    local musicPanel = make("CanvasGroup", { Name = "MusicPlayer", AnchorPoint = Vector2.new(1, 1), Position = musicClosedPos, Size = UDim2.fromOffset(musicWidth, fullHeight), BackgroundColor3 = C.CardBg, GroupTransparency = 1, ClipsDescendants = true, ZIndex = 150, Parent = screenGui })
-    corner(musicPanel, 14)
-
-    -- Header
-    make("TextLabel", { Text = "MUSIC PLAYER", Font = Enum.Font.GothamBold, TextSize = 13, TextColor3 = C.White, TextXAlignment = Enum.TextXAlignment.Left, BackgroundTransparency = 1, Position = UDim2.fromOffset(16, 12), Size = UDim2.new(1, -70, 0, 18), ZIndex = 152, Parent = musicPanel })
-    local subLabel = make("TextLabel", { Text = MUSIC_FOLDER, Font = Enum.Font.Gotham, TextSize = 10, TextColor3 = C.TextDim, TextXAlignment = Enum.TextXAlignment.Left, BackgroundTransparency = 1, Position = UDim2.fromOffset(16, 30), Size = UDim2.new(1, -70, 0, 14), ZIndex = 152, Parent = musicPanel })
-    make("Frame", { Position = UDim2.new(0, 16, 0, 48), Size = UDim2.new(1, -32, 0, 1), BackgroundColor3 = C.Border, ZIndex = 151, Parent = musicPanel })
-    -- macOS-style traffic lights (minimize = yellow, close = red), matching the main window
-    local controls = make("Frame", { AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -14, 0, 15), Size = UDim2.fromOffset(32, 13), BackgroundTransparency = 1, ZIndex = 152, Parent = musicPanel })
-    local minimizeBtn = make("TextButton", { Text = "", AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(0, 13, 0, 0), Size = UDim2.fromOffset(13, 13), BackgroundColor3 = MIN_YELLOW, ZIndex = 153, Parent = controls })
-    circle(minimizeBtn)
-    local musicCloseBtn = make("TextButton", { Text = "", AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 0, 0, 0), Size = UDim2.fromOffset(13, 13), BackgroundColor3 = CLOSE_RED, ZIndex = 153, Parent = controls })
-    circle(musicCloseBtn)
-
-    -- Now playing (text only — no album-art tile)
-    local npTitle = make("TextLabel", { Text = "Nothing playing", Font = Enum.Font.GothamBold, TextSize = 14, TextColor3 = C.White, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, BackgroundTransparency = 1, Position = UDim2.fromOffset(16, 58), Size = UDim2.new(1, -32, 0, 18), ZIndex = 152, Parent = musicPanel })
-    local npSub = make("TextLabel", { Text = "Add audio to the " .. MUSIC_FOLDER .. " folder", Font = Enum.Font.GothamMedium, TextSize = 11, TextColor3 = C.TextGray, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, BackgroundTransparency = 1, Position = UDim2.fromOffset(16, 78), Size = UDim2.new(1, -32, 0, 15), ZIndex = 152, Parent = musicPanel })
-
-    -- Progress
-    local progBg = make("Frame", { Position = UDim2.fromOffset(16, 104), Size = UDim2.new(1, -32, 0, 5), BackgroundColor3 = C.TrackBg, ZIndex = 152, Parent = musicPanel })
-    corner(progBg, 3)
-    local progFill = make("Frame", { Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = C.Accent, ZIndex = 153, Parent = progBg })
-    corner(progFill, 3)
-    local progKnob = make("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0, 0, 0.5, 0), Size = UDim2.fromOffset(10, 10), BackgroundColor3 = C.KnobAccent, ZIndex = 154, Parent = progBg })
-    circle(progKnob); stroke(progKnob, C.Accent, 2)
-    local curTime = make("TextLabel", { Text = "0:00", Font = Enum.Font.GothamMedium, TextSize = 10, TextColor3 = C.TextDim, TextXAlignment = Enum.TextXAlignment.Left, BackgroundTransparency = 1, Position = UDim2.fromOffset(16, 114), Size = UDim2.fromOffset(60, 12), ZIndex = 152, Parent = musicPanel })
-    local totTime = make("TextLabel", { Text = "0:00", Font = Enum.Font.GothamMedium, TextSize = 10, TextColor3 = C.TextDim, TextXAlignment = Enum.TextXAlignment.Right, AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -16, 0, 114), Size = UDim2.fromOffset(60, 12), ZIndex = 152, Parent = musicPanel })
-
-    -- Controls (image-based transport icons; rewind sized up to match skip's visual weight)
-    local ICON_PREV = "rbxassetid://79890332995329"
-    local ICON_PLAY = "rbxassetid://10269757325"
-    local ICON_NEXT = "rbxassetid://15946567603"
-    local ctl = make("Frame", { Position = UDim2.fromOffset(0, 132), Size = UDim2.new(1, 0, 0, 48), BackgroundTransparency = 1, ZIndex = 152, Parent = musicPanel })
-    make("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, HorizontalAlignment = Enum.HorizontalAlignment.Center, VerticalAlignment = Enum.VerticalAlignment.Center, Padding = UDim.new(0, 16), Parent = ctl })
-    local function iconBtn(imgId, btnSize, imgSize, order)
-        local b = make("TextButton", { Text = "", BackgroundTransparency = 1, Size = UDim2.fromOffset(btnSize, btnSize), LayoutOrder = order, ZIndex = 153, Parent = ctl })
-        local img = make("ImageLabel", { Image = imgId, ImageColor3 = C.TextGray, BackgroundTransparency = 1, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(imgSize, imgSize), ScaleType = Enum.ScaleType.Fit, ZIndex = 154, Parent = b })
-        b.MouseEnter:Connect(function() tween(img, { ImageColor3 = C.White }) end)
-        b.MouseLeave:Connect(function() tween(img, { ImageColor3 = C.TextGray }) end)
-        return b, img
-    end
-    local prevBtn = iconBtn(ICON_PREV, 40, 54, 1)
-    -- play / pause (icon only, accent-tinted): play uses a texture, pause is two clean bars
-    local playBtn = make("TextButton", { Text = "", BackgroundTransparency = 1, Size = UDim2.fromOffset(52, 52), LayoutOrder = 2, ZIndex = 153, Parent = ctl })
-    local playImg = make("ImageLabel", { Image = ICON_PLAY, ImageColor3 = C.Accent, BackgroundTransparency = 1, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(34, 34), ScaleType = Enum.ScaleType.Fit, ZIndex = 154, Parent = playBtn })
-    local pauseHolder = make("Frame", { BackgroundTransparency = 1, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(16, 18), Visible = false, ZIndex = 154, Parent = playBtn })
-    local pb1 = make("Frame", { Size = UDim2.fromOffset(5, 18), Position = UDim2.fromOffset(1, 0), BackgroundColor3 = C.Accent, ZIndex = 155, Parent = pauseHolder }); corner(pb1, 2)
-    local pb2 = make("Frame", { Size = UDim2.fromOffset(5, 18), Position = UDim2.fromOffset(10, 0), BackgroundColor3 = C.Accent, ZIndex = 155, Parent = pauseHolder }); corner(pb2, 2)
-    local nextBtn = iconBtn(ICON_NEXT, 40, 30, 3)
-
-    -- Volume
-    local volRow = make("Frame", { Position = UDim2.fromOffset(16, 190), Size = UDim2.new(1, -32, 0, 16), BackgroundTransparency = 1, ZIndex = 152, Parent = musicPanel })
-    make("TextLabel", { Text = "VOL", Font = Enum.Font.GothamBold, TextSize = 9, TextColor3 = C.TextDim, TextXAlignment = Enum.TextXAlignment.Left, BackgroundTransparency = 1, Position = UDim2.fromOffset(0, 2), Size = UDim2.fromOffset(26, 12), ZIndex = 153, Parent = volRow })
-    local volBg = make("Frame", { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 30, 0.5, 0), Size = UDim2.new(1, -30, 0, 5), BackgroundColor3 = C.TrackBg, ZIndex = 152, Parent = volRow })
-    corner(volBg, 3)
-    local volFill = make("Frame", { Size = UDim2.new(0.5, 0, 1, 0), BackgroundColor3 = C.Accent, ZIndex = 153, Parent = volBg })
-    corner(volFill, 3)
-    local volKnob = make("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 0), Size = UDim2.fromOffset(10, 10), BackgroundColor3 = C.KnobAccent, ZIndex = 154, Parent = volBg })
-    circle(volKnob); stroke(volKnob, C.Accent, 2)
-
-    -- Playlist header (label + refresh)
-    local plLabel = make("TextLabel", { Text = "PLAYLIST", Font = Enum.Font.GothamBold, TextSize = 10, TextColor3 = C.TextDim, TextXAlignment = Enum.TextXAlignment.Left, BackgroundTransparency = 1, Position = UDim2.fromOffset(18, 216), Size = UDim2.fromOffset(120, 14), ZIndex = 152, Parent = musicPanel })
-    local refreshBtn = make("TextButton", { Text = "", AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -16, 0, 223), Size = UDim2.fromOffset(22, 22), BackgroundColor3 = C.Element, ZIndex = 152, Parent = musicPanel })
-    corner(refreshBtn, 7); stroke(refreshBtn, C.Border)
-    local refreshIcon = make("ImageLabel", { Image = ICONS.refresh, ImageColor3 = C.TextGray, BackgroundTransparency = 1, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(13, 13), ZIndex = 153, Parent = refreshBtn })
-
-    -- Playlist
-    local list = make("ScrollingFrame", { Position = UDim2.fromOffset(16, 238), Size = UDim2.new(1, -32, 1, -254), BackgroundColor3 = C.WindowBg, ScrollBarThickness = 3, ScrollBarImageColor3 = C.Border, CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y, ZIndex = 152, Parent = musicPanel })
-    corner(list, 11); pad(list, 6, 6, 6, 6)
-    make("UIListLayout", { Padding = UDim.new(0, 5), SortOrder = Enum.SortOrder.LayoutOrder, Parent = list })
-    local emptyLbl = make("TextLabel", { Text = "No tracks — drop audio files in the\n" .. MUSIC_FOLDER .. " folder, then hit refresh", Font = Enum.Font.GothamMedium, TextSize = 11, TextColor3 = C.TextDim, BackgroundTransparency = 1, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.new(1, -20, 0, 40), ZIndex = 153, Parent = list })
-
-    -- elements hidden when minimized
-    local lowerEls = { volRow, plLabel, refreshBtn, list }
-
-    -- ── Behaviour ─────────────────────────────────────────────────────────
-    local rows = {}
-    local refreshPlaylist, playIndex, updateNowPlaying
-
-    function updateNowPlaying()
-        local t = tracks[currentIndex]
-        if t then
-            npTitle.Text = t.name
-            npSub.Text = isPlaying and "Now playing" or "Paused"
-        else
-            npTitle.Text = "Nothing playing"
-            npSub.Text = (#tracks > 0) and "Select a track" or ("Add audio to the " .. MUSIC_FOLDER .. " folder")
-        end
-        playImg.Visible = not isPlaying
-        pauseHolder.Visible = isPlaying
-    end
-
-    function refreshPlaylist()
-        for _, r in pairs(rows) do r:Destroy() end
-        table.clear(rows)
-        emptyLbl.Visible = (#tracks == 0)
-        for i, t in ipairs(tracks) do
-            local active = (i == currentIndex)
-            local row = make("TextButton", { Text = "", Size = UDim2.new(1, 0, 0, 38), BackgroundColor3 = active and C.ElementHover or C.Element, LayoutOrder = i, ZIndex = 153, Parent = list })
-            corner(row, 9)
-            if active then stroke(row, C.Accent, 1) end
-            local num = make("Frame", { Position = UDim2.fromOffset(7, 6), Size = UDim2.fromOffset(26, 26), BackgroundColor3 = active and C.Accent or C.CardBg, ZIndex = 154, Parent = row })
-            corner(num, 8)
-            make("TextLabel", { Text = tostring(i), Font = Enum.Font.GothamBold, TextSize = 11, TextColor3 = active and C.AccentText or C.TextGray, BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), ZIndex = 155, Parent = num })
-            make("TextLabel", { Text = t.name, Font = Enum.Font.GothamMedium, TextSize = 12, TextColor3 = active and C.White or C.TextGray, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, BackgroundTransparency = 1, Position = UDim2.fromOffset(42, 0), Size = UDim2.new(1, -76, 1, 0), ZIndex = 154, Parent = row })
-            local rm = make("TextButton", { Text = "", AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -8, 0.5, 0), Size = UDim2.fromOffset(20, 20), BackgroundTransparency = 1, ZIndex = 155, Parent = row })
-            local x1 = make("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(11, 2), BackgroundColor3 = C.TextDim, Rotation = 45, ZIndex = 156, Parent = rm })
-            corner(x1, 1)
-            local x2 = make("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(11, 2), BackgroundColor3 = C.TextDim, Rotation = -45, ZIndex = 156, Parent = rm })
-            corner(x2, 1)
-            row.MouseEnter:Connect(function() if not (currentIndex == i) then tween(row, { BackgroundColor3 = C.ElementHover }) end end)
-            row.MouseLeave:Connect(function() if not (currentIndex == i) then tween(row, { BackgroundColor3 = C.Element }) end end)
-            rm.MouseEnter:Connect(function() tween(x1, { BackgroundColor3 = C.White }); tween(x2, { BackgroundColor3 = C.White }) end)
-            rm.MouseLeave:Connect(function() tween(x1, { BackgroundColor3 = C.TextDim }); tween(x2, { BackgroundColor3 = C.TextDim }) end)
-            row.MouseButton1Click:Connect(function() playIndex(i) end)
-            rm.MouseButton1Click:Connect(function()
-                table.remove(tracks, i)
-                if currentIndex == i then
-                    pcall(function() musicSound:Stop() end); isPlaying = false; currentIndex = 0
-                elseif currentIndex > i then currentIndex = currentIndex - 1 end
-                updateNowPlaying(); refreshPlaylist()
-            end)
-            rows[i] = row
-        end
-    end
-
-    function playIndex(i)
-        if #tracks == 0 then return end
-        if i < 1 then i = #tracks elseif i > #tracks then i = 1 end
-        local t = tracks[i]
-        if not t.id then
-            if assetLoader then
-                local ok, res = pcall(assetLoader, t.path)
-                if ok and res then t.id = res end
-            end
-        end
-        if not t.id then
-            currentIndex = i; npTitle.Text = t.name
-            npSub.Text = assetLoader and "Couldn't load file" or "Asset loader unavailable"
-            isPlaying = false; updateNowPlaying(); refreshPlaylist(); return
-        end
-        currentIndex = i
-        musicSound.SoundId = t.id
-        musicSound.TimePosition = 0
-        pcall(function() musicSound:Play() end)
-        isPlaying = true
-        updateNowPlaying(); refreshPlaylist()
-    end
-
-    local function togglePlay()
-        if #tracks == 0 then return end
-        if currentIndex == 0 then playIndex(1); return end
-        if isPlaying then pcall(function() musicSound:Pause() end); isPlaying = false
-        else pcall(function() musicSound:Resume() end); isPlaying = true end
-        updateNowPlaying(); refreshPlaylist()
-    end
-    local function nextTrack()
-        if #tracks == 0 then return end
-        playIndex(currentIndex + 1)
-    end
-    local function prevTrack()
-        if #tracks == 0 then return end
-        if musicSound.TimePosition > 3 then musicSound.TimePosition = 0 else playIndex(currentIndex - 1) end
-    end
-    local function rescan()
-        if not (fsList and fsIsFolder) then npSub.Text = "File API unavailable"; updateNowPlaying(); refreshPlaylist(); return end
-        if fsMakeFolder and not fsIsFolder(MUSIC_FOLDER) then pcall(fsMakeFolder, MUSIC_FOLDER) end
-        local prev = tracks[currentIndex]
-        tracks = {}; currentIndex = 0
-        if fsIsFolder(MUSIC_FOLDER) then
-            local ok, files = pcall(fsList, MUSIC_FOLDER)
-            if ok and files then
-                for _, f in ipairs(files) do
-                    local lf = string.lower(f)
-                    if lf:sub(-4) == ".mp3" or lf:sub(-4) == ".ogg" or lf:sub(-4) == ".wav" or lf:sub(-5) == ".flac" then
-                        table.insert(tracks, { name = baseName(f), path = f })
-                        if prev and prev.path == f then currentIndex = #tracks end
-                    end
-                end
-            end
-        end
-        updateNowPlaying(); refreshPlaylist()
-    end
-
-    -- Sliders
-    local function setVol(f)
-        f = math.clamp(f, 0, 1); musicSound.Volume = f
-        volFill.Size = UDim2.new(f, 0, 1, 0); volKnob.Position = UDim2.new(f, 0, 0.5, 0)
-    end
-    setVol(0.5)
-    local volDrag, seekDrag = false, false
-    volBg.InputBegan:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then volDrag = true; setVol((i.Position.X - volBg.AbsolutePosition.X) / math.max(1, volBg.AbsoluteSize.X)) end end)
-    volBg.InputEnded:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then volDrag = false end end)
-    progBg.InputBegan:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then seekDrag = true end end)
-    progBg.InputEnded:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-            if seekDrag and musicSound.TimeLength > 0 then
-                musicSound.TimePosition = math.clamp((i.Position.X - progBg.AbsolutePosition.X) / math.max(1, progBg.AbsoluteSize.X), 0, 1) * musicSound.TimeLength
-            end
-            seekDrag = false
-        end
-    end)
-    table.insert(musicConns, UserInputService.InputChanged:Connect(function(i)
-        if i.UserInputType ~= Enum.UserInputType.MouseMovement and i.UserInputType ~= Enum.UserInputType.Touch then return end
-        if volDrag then setVol((i.Position.X - volBg.AbsolutePosition.X) / math.max(1, volBg.AbsoluteSize.X)) end
-        if seekDrag then
-            local f = math.clamp((i.Position.X - progBg.AbsolutePosition.X) / math.max(1, progBg.AbsoluteSize.X), 0, 1)
-            progFill.Size = UDim2.new(f, 0, 1, 0); progKnob.Position = UDim2.new(f, 0, 0.5, 0)
-        end
-    end))
-
-    -- Wire
-    playBtn.MouseButton1Click:Connect(togglePlay)
-    nextBtn.MouseButton1Click:Connect(nextTrack)
-    prevBtn.MouseButton1Click:Connect(prevTrack)
-    refreshBtn.MouseButton1Click:Connect(rescan)
-    refreshBtn.MouseEnter:Connect(function() tween(refreshBtn, { BackgroundColor3 = C.ElementHover }); tween(refreshIcon, { ImageColor3 = C.White }) end)
-    refreshBtn.MouseLeave:Connect(function() tween(refreshBtn, { BackgroundColor3 = C.Element }); tween(refreshIcon, { ImageColor3 = C.TextGray }) end)
-    table.insert(musicConns, musicSound.Ended:Connect(function() nextTrack() end))
-    table.insert(musicConns, RunService.RenderStepped:Connect(function()
-        if not (musicPanel and musicPanel.Parent) or not musicOpen then return end
-        local len = musicSound.TimeLength
-        if isPlaying and len and len > 0 then
-            if not seekDrag then
-                local f = math.clamp(musicSound.TimePosition / len, 0, 1)
-                progFill.Size = UDim2.new(f, 0, 1, 0); progKnob.Position = UDim2.new(f, 0, 0.5, 0)
-            end
-            curTime.Text = fmtTime(musicSound.TimePosition); totTime.Text = fmtTime(len)
-        end
-    end))
-    table.insert(musicConns, { Disconnect = function() pcall(function() musicSound:Stop(); musicSound:Destroy() end) end })
-
-    -- Minimize / close (macOS traffic lights)
-    local function setMinimized(m)
-        minimized = (m == true)
-        for _, e in ipairs(lowerEls) do e.Visible = not minimized end
-        TweenService:Create(musicPanel, PROFILE_TWEEN, { Size = UDim2.fromOffset(musicWidth, minimized and compactHeight or fullHeight) }):Play()
-    end
-    minimizeBtn.MouseEnter:Connect(function() tween(minimizeBtn, { BackgroundColor3 = MIN_YELLOW_HI }) end)
-    minimizeBtn.MouseLeave:Connect(function() tween(minimizeBtn, { BackgroundColor3 = MIN_YELLOW }) end)
-    minimizeBtn.MouseButton1Click:Connect(function() setMinimized(not minimized) end)
-    musicCloseBtn.MouseEnter:Connect(function() tween(musicCloseBtn, { BackgroundColor3 = CLOSE_RED_HI }) end)
-    musicCloseBtn.MouseLeave:Connect(function() tween(musicCloseBtn, { BackgroundColor3 = CLOSE_RED }) end)
-
-    local function setMusicVisible(v, instant)
-        musicOpen = (v == true)
-        local tp = musicOpen and musicOpenPos or musicClosedPos
-        local tr = musicOpen and 0 or 1
-        if instant then
-            musicPanel.Position = tp; musicPanel.GroupTransparency = tr
-        else
-            TweenService:Create(musicPanel, PROFILE_TWEEN, { Position = tp, GroupTransparency = tr }):Play()
-        end
-        if musicToggleBtn then musicToggleBtn.BackgroundColor3 = musicOpen and C.PillActive or C.Element end
-        if musicToggleIcon then musicToggleIcon.ImageColor3 = musicOpen and C.Accent or C.TextGray end
-        if musicOpen and #tracks == 0 then rescan() end
-    end
-    local function toggleMusic() setMusicVisible(not musicOpen) end
-    local function closeMusic(instant) setMusicVisible(false, instant) end
-    musicCloseBtn.MouseButton1Click:Connect(function() setMusicVisible(false) end)
-
-    if musicToggleBtn then
-        musicToggleBtn.MouseEnter:Connect(function() if not musicOpen then tween(musicToggleBtn, { BackgroundColor3 = C.ElementHover }) end end)
-        musicToggleBtn.MouseLeave:Connect(function() tween(musicToggleBtn, { BackgroundColor3 = musicOpen and C.PillActive or C.Element }) end)
-    end
-
-    rescan(); updateNowPlaying()
-    return toggleMusic, closeMusic
+-- Music player removed; preserve the optional UI callback interface.
+local function buildMusicPlayer()
+    return function() end, function() end
 end
 
 function Library:CreateWindow(opts)
@@ -22600,7 +22283,7 @@ function Library:CreateWindow(opts)
     local containerScale = make("UIScale", { Scale = 1, Parent = container })
 
     -- ── LOADING SCREEN (slam-in intro, themed with the accent colour) ─────
-    local loadingEnabled      = opts.LoadingAnimation ~= false
+    local loadingEnabled      = false -- loading splash removed for yanus hub
     local loadingDuration     = math.clamp(tonumber(opts.LoadingDuration) or 2.65, 1.5, 8)
     local loadingText         = tostring(opts.LoadingText or opts.Name or "Oxidelib")
     local loadingSub          = tostring(opts.LoadingSubtitle or "HUB")
@@ -24700,15 +24383,15 @@ end)()
 			end
 
 			local window = tensenUILib:CreateWindow({
-				Name = "Tensen Hub: Grand Piece Online",
-				BrandSubtitle = "By ttaapper & yaoei",
-				StatusText = "discord.gg/tensenhub",
+				Name = "yanus hub",
+				BrandSubtitle = "Farming & quality of life",
+				StatusText = "yanus hub",
 				Size = UDim2.fromOffset(720, 500),
 				ToggleKey = Enum.KeyCode.RightShift,
-				LoadingAnimation = true,
-				LoadingText = "Tensen Hub",
+				LoadingAnimation = false,
+				LoadingText = "yanus hub",
 				LoadingSubtitle = "Grand Piece Online",
-				LoadingFooter = "By ttaapper & yaoei",
+				LoadingFooter = "",
 			})
 
 			local startupLoader = window.ScreenGui and window.ScreenGui:FindFirstChild("StartupLoader")
@@ -28283,8 +27966,8 @@ Private server travel needs teleport queue support]],
 			end
 
 			window:Notify({
-				Title = "Tensen Hub",
-				Content = "Loaded. Press your Toggle Menu Key (RightControl by default) to hide or show the menu.",
+				Title = "yanus hub",
+				Content = "yanus hub loaded.",
 				Type = "success",
 				Duration = 5,
 			})
@@ -28299,7 +27982,7 @@ Private server travel needs teleport queue support]],
 			task.wait(0.1)
 			local PlayersService = game:GetService("Players")
 			local RunService = game:GetService("RunService")
-			cloneref(Instance.new("VirtualInputManager"))
+			-- Removed unused VirtualInputManager construction.
 			local localPlayer = PlayersService.LocalPlayer
 			local character = localPlayer.Character or localPlayer.CharacterAdded:Wait()
 			local hasGeppo
@@ -31239,7 +30922,7 @@ Private server travel needs teleport queue support]],
 						if not getgenv().__TensenStaminaWarned then
 							getgenv().__TensenStaminaWarned = true
 							log(
-								"[Tensen] No Dash/Geppo Stamina needs hookmetamethod, newcclosure and getnamecallmethod - this executor is missing one, so the toggle(s) stay inert."
+								"[yanus] No Dash/Geppo Stamina needs hookmetamethod, newcclosure and getnamecallmethod - this executor is missing one, so the toggle(s) stay inert."
 							)
 						end
 
@@ -31302,7 +30985,7 @@ Private server travel needs teleport queue support]],
 						return true
 					end
 
-					log("[Tensen] stamina hook could not hook __namecall: " .. tostring(result))
+					log("[yanus] stamina hook could not hook __namecall: " .. tostring(result))
 					return false
 				end
 
@@ -31318,7 +31001,7 @@ Private server travel needs teleport queue support]],
 					then
 						getgenv().__DashStamSaid = true
 						log(
-							"[Tensen] No Dash Stamina armed - the dash stamina charge is dropped while you dash by hand, so the bar never drains and you can dash freely (farm tweens are left alone)."
+							"[yanus] No Dash Stamina armed - the dash stamina charge is dropped while you dash by hand, so the bar never drains and you can dash freely (farm tweens are left alone)."
 						)
 					end
 
@@ -31373,7 +31056,7 @@ Private server travel needs teleport queue support]],
 						if not getgenv().__TensenStaminaWarned then
 							getgenv().__TensenStaminaWarned = true
 							log(
-								"[Tensen] No Dash/Geppo Stamina needs hookmetamethod, newcclosure and getnamecallmethod - this executor is missing one, so the toggle(s) stay inert."
+								"[yanus] No Dash/Geppo Stamina needs hookmetamethod, newcclosure and getnamecallmethod - this executor is missing one, so the toggle(s) stay inert."
 							)
 						end
 
@@ -31436,7 +31119,7 @@ Private server travel needs teleport queue support]],
 						return true
 					end
 
-					log("[Tensen] stamina hook could not hook __namecall: " .. tostring(result))
+					log("[yanus] stamina hook could not hook __namecall: " .. tostring(result))
 					return false
 				end
 
@@ -31452,7 +31135,7 @@ Private server travel needs teleport queue support]],
 					then
 						getgenv().__GeppoStamSaid = true
 						log(
-							"[Tensen] No Geppo Stamina armed - the Geppo / Sky Walk stamina charge is dropped when you geppo by hand, so the bar never drains (farm flight keep-alive is left alone). You still rise from the Infinite Jump push."
+							"[yanus] No Geppo Stamina armed - the Geppo / Sky Walk stamina charge is dropped when you geppo by hand, so the bar never drains (farm flight keep-alive is left alone). You still rise from the Infinite Jump push."
 						)
 					end
 
@@ -34830,7 +34513,7 @@ Private server travel needs teleport queue support]],
                     getgenv().autofarm = false
                     getgenv().FarmLastError = reason
                     getgenv().ForceNoClipReal = false
-                    warn("[Tensen Auto Farm] " .. reason)
+                    warn("[yanus Auto Farm] " .. reason)
                     local ui = getgenv().TensenUILib
                     if ui and type(ui.SetFlag) == "function" then
                         pcall(function() ui:SetFlag("AutoFarmToggle", false) end)
@@ -40373,7 +40056,7 @@ Private server travel needs teleport queue support]],
 						if not warnedTween then
 							warnedTween = true
 							log(
-								"[Tensen] getgenv().TweenToCFrame is not exported by the hub - fishing / merchant travel is disabled"
+								"[yanus] getgenv().TweenToCFrame is not exported by the hub - fishing / merchant travel is disabled"
 							)
 						end
 						return
