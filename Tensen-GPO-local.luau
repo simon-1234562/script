@@ -13,17 +13,40 @@ end
 -- Compatibility aliases used by the recovered feature code.
 env.__TensenWF = writefile
 env.__TensenGC = getgc
-env.__YanusBuild = "npcchat-dialogue-v7"
+env.AutoTrade, env.TweenToPlayer, env.AutoLoad = false, false, false
+env.ESP = env.ESP or {}
+env.ESP.Players, env.ESP.AnimatedBorder, env.ESP.Pulse, env.ESP.Rainbow = false, false, false, false
+env.__YanusBuild = "compact-profiles-v8"
 
 env.__TensenAutoQuest = (function()
 -- Quest-only controller. Idle until explicitly enabled; never auto-loaded from config.
 local g = getgenv()
 local Q = { Enabled = false, Status = "off", Mode = "Sandora - Desert Bandits (Noah)", TargetOverride = "" }
 Q.Modes = { "Sandora - Desert Bandits (Noah)", "Use current quest (accept manually)" }
+Q.ProfileList = {
+    {label=Q.Modes[1],giver="Noah",enemies={"Desert Bandit"},minLevel=10,tested=true},
+    {label="Beginnings - Bandits (Daph, test)",giver="Daph",enemies={"Bandit"},minLevel=0},
+    {label="Beginnings - Bandit Boss (Ronny, test)",giver="Ronny",enemies={"Bandit Boss"},minLevel=5,boss=true},
+    {label="Sandora - Lucid (Tyrone, test)",giver="Tyrone",enemies={"Lucid"},minLevel=15,boss=true},
+    {label="Shell's Town - Marines (Robert, test)",giver="Robert",enemies={"Corrupt Marine","Corrupted Marine"},minLevel=20},
+    {label="Shell's Town - Bandits (Kevin, test)",giver="Kevin",enemies={"Shell's Bandit","Shells Bandit","Shell Bandit"},minLevel=25},
+    {label="Shell's Town - Logan (Gozen, test)",giver="Gozen",enemies={"Axe Hand Logan"},minLevel=30,boss=true},
+}
+Q.Profiles = {}
+for i,profile in ipairs(Q.ProfileList)do
+    profile.placeId=3978370137
+    Q.Profiles[profile.label]=profile
+    if i>1 then Q.Modes[#Q.Modes+1]=profile.label end
+end
+Q.AutoMode="Recommended nearby quest (test)"
+Q.CustomMode="Custom quest giver and enemy (test)"
+Q.Modes[#Q.Modes+1]=Q.AutoMode;Q.Modes[#Q.Modes+1]=Q.CustomMode
+Q.CustomGiver=""
 local lastFailure, lastFailureTime = nil, -math.huge
-function Q.Configure(mode, target)
+function Q.Configure(mode, target, giver)
     if Q.Enabled then Q.Set(false); if Q.Toggle then Q.Toggle:Set(false) end end
     if mode then Q.Mode = mode end
+    if giver ~= nil then Q.CustomGiver=tostring(giver):match("^%s*(.-)%s*$") end
     if target ~= nil then Q.TargetOverride = tostring(target):match("^%s*(.-)%s*$") end
     Q.Status = "off - " .. Q.Mode
 end
@@ -61,6 +84,7 @@ function Q.Set(enabled)
         g.SelectedNPC = priorNPCSettings.selected
         priorNPCSettings = nil
     end
+    Q.ActiveProfile = nil
     Q.Enabled = enabled == true
     Q.Status = Q.Enabled and "checking level and quest" or "off"
     if not Q.Enabled then return end
@@ -71,16 +95,19 @@ function Q.Set(enabled)
     local ok, level = pcall(g.Level)
     level = ok and tonumber(level) or nil
     if not level then Q.Fail("Could not read your character level from the HUD"); return end
-    if Q.Mode == Q.Modes[1] and level < 10 then
-        Q.Fail("Noah's Desert Bandits quest requires level 10 or above")
-        return
+    if Q.Mode ~= Q.Modes[2] then
+        local profile,reason=Q.SelectProfile(level)
+        if not profile then Q.Fail(reason or "No suitable quest profile nearby");return end
+        if level<profile.minLevel then Q.Fail(profile.giver .. " requires level " .. profile.minLevel .. " or above");return end
+        if game.PlaceId~=profile.placeId then Q.Fail("Travel to First Sea for this quest");return end
+        Q.ActiveProfile=profile
     end
     if g.autofarm then
         Q.Fail("Turn off Recovered Quest Routes (Advanced) before using the main Auto Farm button")
         return
     end
     priorNPCSettings = {enabled = g.TweenToNPC, selected = g.SelectedNPC}
-    local target = "Desert Bandit"
+    local target = Q.ActiveProfile and Q.ProfileTarget(Q.ActiveProfile) or "Desert Bandit"
     if Q.Mode == Q.Modes[2] then
         local data, errorKind = Q.ReadQuest()
         if not data then Q.Fail("Accept the quest you want to farm first (" .. tostring(errorKind) .. ")"); return end
@@ -140,29 +167,62 @@ function Q.ResolveTarget(progress)
     end
     return nil
 end
-local function questState()
-    local data, reason = Q.ReadQuest()
-    if not data then return reason == "no active quest" and "none" or "unknown" end
-    if Q.Mode == Q.Modes[2] or normalize(data.title):find("desertbandit", 1, true) then
-        return "active", data.progress
-    end
-    return "other", data.progress
+local function enemyKey(text)
+    return normalize(tostring(text or ""):gsub("%(s%)", "")):gsub("s$", "")
 end
-local function noahNear(root)
-    if cachedNoah and cachedNoah.Parent then return cachedNoah end
-    if tick() - lastScan < 5 then return nil end
-    lastScan = tick()
-    local npcs = workspace:FindFirstChild("NPCs")
-    -- Search the NPC container only; never enumerate the whole world.
-    for _, model in ipairs(npcs and npcs:GetChildren() or {}) do
-        if model:IsA("Model") then
-            local hum = model:FindFirstChildOfClass("Humanoid")
-            if normalize(model.Name) == "noah" or (hum and normalize(hum.DisplayName) == "noah") then
-                local part = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart", true)
-                if part and (part.Position - root.Position).Magnitude < 1500 then cachedNoah = model; return model end
+function Q.Matches(profile,data)
+    local wanted=tostring(data.progress or ""):match("%d+%s*/%s*%d+%s*(.+)")
+    for _,name in ipairs(profile.enemies)do
+        if wanted and enemyKey(wanted)==enemyKey(name)then return true end
+        if not wanted and normalize(data.title):find(normalize(name),1,true)then return true end
+    end
+    return false
+end
+function Q.FindGiver(profile)
+    local player=game:GetService("Players").LocalPlayer
+    local root=player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+    local npcs=workspace:FindFirstChild("NPCs")
+    if not root then return nil end
+    for _,model in ipairs(npcs and npcs:GetChildren()or {})do
+        if model:IsA("Model")then
+            local hum=model:FindFirstChildOfClass("Humanoid")
+            if normalize(model.Name)==normalize(profile.giver)or(hum and normalize(hum.DisplayName)==normalize(profile.giver))then
+                local part=model:FindFirstChild("HumanoidRootPart")or model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart",true)
+                if part and(part.Position-root.Position).Magnitude<1500 then return model end
             end
         end
     end
+end
+function Q.ProfileTarget(profile)
+    local npcs=workspace:FindFirstChild("NPCs")
+    for _,model in ipairs(npcs and npcs:GetChildren()or {})do
+        if model:IsA("Model")and model:FindFirstChildOfClass("Humanoid")then
+            for _,name in ipairs(profile.enemies)do if enemyKey(model.Name)==enemyKey(name)then return model.Name end end
+        end
+    end
+    return profile.enemies[1]
+end
+function Q.SelectProfile(level)
+    if Q.Mode==Q.CustomMode then
+        if Q.CustomGiver==""or Q.TargetOverride==""then return nil,"Custom quest requires both a giver name and an enemy name"end
+        return {label="Custom - "..Q.CustomGiver,giver=Q.CustomGiver,enemies={Q.TargetOverride},minLevel=0,placeId=game.PlaceId}
+    end
+    if Q.Mode~=Q.AutoMode then return Q.Profiles[Q.Mode]end
+    local current=Q.ReadQuest()
+    local best
+    for _,profile in ipairs(Q.ProfileList)do
+        if not profile.boss and level>=profile.minLevel and game.PlaceId==profile.placeId and Q.FindGiver(profile)then
+            if current and Q.Matches(profile,current)then return profile end
+            if not best or profile.minLevel>best.minLevel then best=profile end
+        end
+    end
+    return best,"No eligible quest giver is loaded nearby. Travel to the island manually, or choose a quest explicitly"
+end
+local function questState()
+    local data,reason=Q.ReadQuest()
+    if not data then return reason=="no active quest"and"none"or"unknown"end
+    if Q.Mode==Q.Modes[2]or(Q.ActiveProfile and Q.Matches(Q.ActiveProfile,data))then return "active",data.progress end
+    return "other",data.progress
 end
 local function choice(gui, expected)
     -- Noah's live dialogue uses NPCCHAT; Dialogue is a different, disabled UI.
@@ -217,7 +277,7 @@ function Q.ClickChoice(button, label)
 end
 function Q.Step()
     if not Q.Enabled then return end
-    if (Q.Mode == Q.Modes[1] and game.PlaceId ~= 3978370137)
+    if (Q.ActiveProfile and game.PlaceId ~= Q.ActiveProfile.placeId)
         or (Q.Mode == Q.Modes[2] and game.PlaceId ~= 3978370137 and game.PlaceId ~= 7465136166) then
         Q.Fail("The selected mode is not supported in this place"); return
     end
@@ -230,6 +290,15 @@ function Q.Step()
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     local gui = player:FindFirstChild("PlayerGui")
     if not root or not hum or hum.Health <= 0 or not gui then release(); Q.Status = "waiting to respawn"; return end
+    if Q.Mode==Q.AutoMode and not Q.ReadQuest()then
+        local ok,level=pcall(g.Level)
+        local nextProfile=ok and tonumber(level)and Q.SelectProfile(tonumber(level))
+        if nextProfile and nextProfile~=Q.ActiveProfile then
+            release()
+            if type(g.StopCurrentTween)=="function"then pcall(g.StopCurrentTween)end
+            Q.ActiveProfile=nextProfile;g.SelectedNPC=Q.ProfileTarget(nextProfile)
+        end
+    end
     local state, progress = questState()
     if state == "active" then
         if Q.Mode == Q.Modes[2] then
@@ -254,9 +323,11 @@ function Q.Step()
         Q.Status = "Quest finished - accept another quest manually to continue"
         return
     end
-    local noah = noahNear(root)
+    local profile=Q.ActiveProfile
+    if not profile then Q.Fail("Choose a quest profile first");return end
+    local noah = Q.FindGiver(profile)
     local part = noah and (noah:FindFirstChild("HumanoidRootPart") or noah.PrimaryPart or noah:FindFirstChildWhichIsA("BasePart", true))
-    if not part then Q.Fail("Noah was not found in the nearby NPCs; stand beside him and try again"); return end
+    if not part then Q.Fail(profile.giver .. " is not loaded nearby. Travel to the island and stand near the quest giver"); return end
     if not g.AutoQuestBusy then
         g.AutoQuestBusy = true
         if type(g.StopCurrentTween) == "function" then pcall(g.StopCurrentTween) end
@@ -267,9 +338,9 @@ function Q.Step()
     local interactionRange = math.max(1.5, math.min(6, (prompt and prompt.MaxActivationDistance or 8) - 0.75))
     local verticalGap = math.abs(root.Position.Y - part.Position.Y)
     if (part.Position - root.Position).Magnitude > interactionRange or verticalGap > 1.5 then
-        Q.Status = "returning to Noah"
+        Q.Status = "returning to " .. profile.giver
         travelStarted = travelStarted or tick()
-        if tick() - travelStarted > 30 then Q.Fail("Could not reach Noah within 30 seconds"); return end
+        if tick() - travelStarted > 30 then Q.Fail("Could not reach " .. profile.giver .. " within 30 seconds"); return end
         local state = g.__TensenTweenState
         if not state or not state.Enabled then
             local move = g.TweenToMob2 or (g.__F2Tween and g.__F2Tween.TweenToMob2)
@@ -291,19 +362,36 @@ function Q.Step()
     end
     stopOwnTravel()
     started = started or tick()
-    Q.Status = "accepting Noah's Desert Bandits quest"
-    if tick() - started > 25 then Q.Fail("Quest was not confirmed; accept Noah's quest manually and send the last Auto Quest status"); return end
+    Q.Status = "accepting " .. profile.label
+    if tick() - started > 25 then Q.Fail("Quest was not confirmed; accept it manually and send the last Auto Farm status"); return end
     if tick() - lastInput < 1.5 then return end
     lastInput = tick()
-    local button, label = choice(gui, "alright"), "Alright!"
-    if not button then button, label = choice(gui, "howcanihelp"), "How can I help?" end
+    local button,label
+    local chat=gui:FindFirstChild("NPCCHAT")
+    local frame=chat and chat:FindFirstChild("Frame")
+    local primary=frame and frame:FindFirstChild("go")
+    if primary and primary:IsA("GuiButton")and visible(primary,gui)then
+        button=primary;label="Continue"
+        pcall(function()
+            local content=primary.ContentText
+            if type(content)=="string"and content~=""then label=content
+            elseif type(primary.Text)=="string"then label=primary.Text end
+        end)
+        local decision=normalize(label)
+        if decision:find("robux",1,true)or decision:find("purchase",1,true)or decision:find("pay",1,true)or decision:find("buy",1,true)then
+            Q.Fail("The dialogue is offering a purchase rather than a recognized quest choice");return
+        end
+    else
+        button,label=choice(gui,"alright"),"Alright!"
+        if not button then button,label=choice(gui,"howcanihelp"),"How can I help?"end
+    end
     if button then
         local method = Q.ClickChoice(button, label)
-        Q.Status = "Noah - selected " .. label .. " (" .. method .. ")"
+        Q.Status = profile.giver .. " - selected " .. label .. " (" .. method .. ")"
     else
         local chat = gui:FindFirstChild("NPCCHAT")
         if chat and visible(chat, gui) then
-            Q.Status = "Noah - waiting for dialogue choices"
+            Q.Status = profile.giver .. " - waiting for dialogue choices"
             return -- Do not restart an open conversation while its text is appearing.
         end
         local input = game:GetService("VirtualInputManager")
@@ -21827,7 +21915,7 @@ end
 rebuildReverse()
 
 local function tween(inst, props)
-    TweenService:Create(inst, TWEEN, props):Play()
+    for property,value in pairs(props)do inst[property]=value end
 end
 local function paint(inst, prop, key, instant)
     inst:SetAttribute("Theme_" .. prop, key)
@@ -22367,1618 +22455,138 @@ local function buildMusicPlayer()
     return function() end, function() end
 end
 
+-- Compact yanus window. No splash, avatar, music, profile graph or render loop.
 function Library:CreateWindow(opts)
     opts = opts or {}
-
-    -- Auto-start the tag system
-    startTagSystem()
-
-    local logoAsset      = normalizeAssetId(opts.Logo or DEFAULT_LOGO)
-    -- Zoom factor applied to the logo inside its clipping holder. The default
-    -- asset is mostly transparent padding, so it needs a healthy zoom to read;
-    -- a caller-supplied logo is assumed to be already cropped.
-    local logoZoom       = math.clamp(tonumber(opts.LogoZoom) or (logoAsset == DEFAULT_LOGO and 2.4 or 1), 1, 6)
-    local windowSize     = opts.Size or UDim2.fromOffset(700, 490)
-    local windowPosition = opts.Position or UDim2.fromScale(0.5, 0.5)
-    local guiName        = opts.GuiName or "Oxidelib"
-
-    -- Mobile detection (auto, or forced via opts.Mobile = true/false)
-    local isMobile = (opts.Mobile == true)
-        or (opts.Mobile ~= false and UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled)
-
-    local HOTBAR_HEIGHT  = 36
-    local HOTBAR_GAP     = 8
-
-    local targetParent
-    if typeof(opts.Parent) == "Instance" then
-        targetParent = opts.Parent
-    else
-        pcall(function() targetParent = (gethui and gethui()) or game:GetService("CoreGui") end)
-        if not targetParent then targetParent = Players.LocalPlayer:WaitForChild("PlayerGui") end
-    end
-
-    local function removeExistingGui(parent)
-        if opts.ReplaceExisting == false or not parent then return end
-        for _, child in ipairs(parent:GetChildren()) do
-            if child:IsA("ScreenGui") and child.Name == guiName then child:Destroy() end
-        end
-    end
-
-    removeExistingGui(targetParent)
-
-    local screenGui = make("ScreenGui", {
-        Name = guiName, ResetOnSpawn = false, IgnoreGuiInset = true,
-        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-        DisplayOrder = opts.DisplayOrder or 10,
-    })
-    local parented = pcall(function() screenGui.Parent = targetParent end)
-    if not parented then
-        targetParent = Players.LocalPlayer:WaitForChild("PlayerGui")
-        removeExistingGui(targetParent)
-        screenGui.Parent = targetParent
-    end
-    table.insert(Library._windows, screenGui)
-
-    local containerW = windowSize.X.Offset
-    local containerH = windowSize.Y.Offset + HOTBAR_GAP + HOTBAR_HEIGHT
-
-    local container = make("Frame", {
-        Name = "OxidelibContainer",
-        Size = UDim2.fromOffset(containerW, containerH),
-        Position = windowPosition,
-        AnchorPoint = Vector2.new(0.5, 0.5),
-        BackgroundTransparency = 1,
-        ZIndex = 2,
-        Parent = screenGui,
-    })
-    local containerScale = make("UIScale", { Scale = 1, Parent = container })
-
-    -- ── LOADING SCREEN (slam-in intro, themed with the accent colour) ─────
-    local loadingEnabled      = false -- loading splash removed for yanus hub
-    local loadingDuration     = math.clamp(tonumber(opts.LoadingDuration) or 2.65, 1.5, 8)
-    local loadingText         = tostring(opts.LoadingText or opts.Name or "Oxidelib")
-    local loadingSub          = tostring(opts.LoadingSubtitle or "HUB")
-    local loadingFooter       = tostring(opts.LoadingFooter or "Oxidelib")
-    local overlayTransparency = math.clamp(tonumber(opts.LoadingOverlayTransparency) or 0.35, 0, 0.9)
-
-    -- accent palette derived from the active theme
-    local ACC       = C.Accent
-    local ACC_DARK  = C.AccentDim or Color3.fromRGB(20, 38, 64)
-    local ACC_LIGHT = Color3.fromRGB(255, 255, 255)
-
-    local loadingComplete       = not loadingEnabled
-    local loadingMotionComplete = not loadingEnabled
-    local loadingLayer, loadingContent, loadingLogoScale, loadingTitleScale, loadingProgressFill
-    local loadingBlur, loadingSound
-
-    if loadingEnabled then
-        loadingLayer = make("CanvasGroup", {
-            Name = "StartupLoader", Size = UDim2.fromScale(1, 1),
-            BackgroundColor3 = Color3.fromRGB(0, 0, 0), BackgroundTransparency = 1,
-            GroupTransparency = 0, ZIndex = 500, Parent = screenGui,
-        })
-
-        if opts.LoadingBlur ~= false then
-            loadingBlur = Instance.new("BlurEffect")
-            loadingBlur.Size = 0
-            pcall(function() loadingBlur.Parent = game:GetService("Lighting") end)
-        end
-
-        if opts.LoadingSound then
-            loadingSound = Instance.new("Sound")
-            loadingSound.SoundId = normalizeAssetId(opts.LoadingSound)
-            loadingSound.Volume = 0
-            loadingSound.Looped = false
-            loadingSound.TimePosition = tonumber(opts.LoadingSoundStart) or 0
-            pcall(function() loadingSound.Parent = SoundService end)
-        end
-
-        local function sideLabel(anchorX)
-            local lbl = make("TextLabel", {
-                Size = UDim2.fromOffset(260, 54), Position = UDim2.new(anchorX, 0, 0.5, -27),
-                AnchorPoint = Vector2.new(0.5, 0.5), BackgroundTransparency = 1,
-                Text = loadingText, Font = Enum.Font.GothamBlack, TextScaled = true,
-                TextColor3 = C.White, TextStrokeColor3 = Color3.fromRGB(0, 0, 0), TextStrokeTransparency = 0.45,
-                TextTransparency = 1, ZIndex = 508, Parent = loadingLayer,
-            })
-            make("UIGradient", { Color = ColorSequence.new({
-                ColorSequenceKeypoint.new(0, ACC_DARK),
-                ColorSequenceKeypoint.new(0.5, ACC_LIGHT),
-                ColorSequenceKeypoint.new(1, ACC_DARK),
-            }), Parent = lbl })
-            return lbl
-        end
-        local leftLbl  = sideLabel(0.18)
-        local rightLbl = sideLabel(0.82)
-
-        local mainWrap = make("Frame", {
-            AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(80, 36),
-            Position = UDim2.new(0.5, 0, 0.5, -20), BackgroundTransparency = 1, ZIndex = 510, Parent = loadingLayer,
-        })
-        local tag = make("TextLabel", {
-            Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = loadingText,
-            Font = Enum.Font.GothamBlack, TextScaled = true, TextColor3 = C.White,
-            TextStrokeColor3 = Color3.fromRGB(0, 0, 0), TextStrokeTransparency = 0.3,
-            TextXAlignment = Enum.TextXAlignment.Center, TextTransparency = 1, ZIndex = 510, Parent = mainWrap,
-        })
-        local tagGrad = make("UIGradient", { Rotation = 0, Color = ColorSequence.new({
-            ColorSequenceKeypoint.new(0, ACC_DARK),
-            ColorSequenceKeypoint.new(0.35, ACC),
-            ColorSequenceKeypoint.new(0.5, ACC_LIGHT),
-            ColorSequenceKeypoint.new(0.65, ACC),
-            ColorSequenceKeypoint.new(1, ACC_DARK),
-        }), Parent = tag })
-
-        local line = make("Frame", {
-            Size = UDim2.fromOffset(0, 2), Position = UDim2.new(0.5, 0, 0.5, 60), AnchorPoint = Vector2.new(0.5, 0.5),
-            BackgroundColor3 = ACC, BackgroundTransparency = 1, ZIndex = 510, Parent = loadingLayer,
-        })
-        make("UIGradient", { Transparency = NumberSequence.new({
-            NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.5, 0), NumberSequenceKeypoint.new(1, 1),
-        }), Parent = line })
-
-        local sub = make("TextLabel", {
-            Size = UDim2.fromOffset(400, 22), Position = UDim2.new(0.5, 0, 0.5, 82), AnchorPoint = Vector2.new(0.5, 0.5),
-            BackgroundTransparency = 1, Text = loadingSub, Font = Enum.Font.GothamBold, TextSize = 16,
-            TextColor3 = ACC_LIGHT, TextStrokeColor3 = Color3.fromRGB(0, 0, 0), TextStrokeTransparency = 0.5,
-            TextXAlignment = Enum.TextXAlignment.Center, TextTransparency = 1, ZIndex = 510, Parent = loadingLayer,
-        })
-        local footer = make("TextLabel", {
-            Size = UDim2.fromOffset(400, 16), Position = UDim2.new(0.5, 0, 0.5, 112), AnchorPoint = Vector2.new(0.5, 0.5),
-            BackgroundTransparency = 1, Text = loadingFooter, Font = Enum.Font.GothamMedium, TextSize = 11,
-            TextColor3 = Color3.fromRGB(200, 150, 90), TextStrokeColor3 = Color3.fromRGB(0, 0, 0), TextStrokeTransparency = 0.6,
-            TextXAlignment = Enum.TextXAlignment.Center, TextTransparency = 1, ZIndex = 510, Parent = loadingLayer,
-        })
-
-        task.spawn(function()
-            if loadingBlur then TweenService:Create(loadingBlur, TweenInfo.new(0.4, Enum.EasingStyle.Quad), { Size = 10 }):Play() end
-            if loadingSound then
-                pcall(function() loadingSound:Play() end)
-                TweenService:Create(loadingSound, TweenInfo.new(0.5), { Volume = math.clamp(tonumber(opts.LoadingSoundVolume) or 0.45, 0, 1) }):Play()
-            end
-            TweenService:Create(loadingLayer, TweenInfo.new(0.34, Enum.EasingStyle.Quad), { BackgroundTransparency = overlayTransparency }):Play()
-            TweenService:Create(leftLbl, TweenInfo.new(0.25, Enum.EasingStyle.Quad), { TextTransparency = 0 }):Play()
-            task.wait(0.16)
-            TweenService:Create(rightLbl, TweenInfo.new(0.25, Enum.EasingStyle.Quad), { TextTransparency = 0 }):Play()
-            task.wait(math.clamp(loadingDuration * 0.4, 0.5, 2.0))
-            if not loadingLayer.Parent then return end
-            local slideInfo = TweenInfo.new(0.32, Enum.EasingStyle.Quart, Enum.EasingDirection.In)
-            TweenService:Create(leftLbl, slideInfo, { Position = UDim2.new(0.5, 0, 0.5, -27) }):Play()
-            TweenService:Create(rightLbl, slideInfo, { Position = UDim2.new(0.5, 0, 0.5, -27) }):Play()
-            task.wait(0.32)
-            leftLbl.Visible = false; rightLbl.Visible = false
-            tag.TextTransparency = 0
-            TweenService:Create(mainWrap, TweenInfo.new(0.22, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Size = UDim2.fromOffset(820, 140) }):Play()
-            task.wait(0.26)
-            line.BackgroundTransparency = 0
-            TweenService:Create(line, TweenInfo.new(0.45, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), { Size = UDim2.fromOffset(380, 2) }):Play()
-            TweenService:Create(sub, TweenInfo.new(0.4, Enum.EasingStyle.Quad), { TextTransparency = 0 }):Play()
-            task.wait(0.16)
-            TweenService:Create(footer, TweenInfo.new(0.35, Enum.EasingStyle.Quad), { TextTransparency = 0.1 }):Play()
-            task.spawn(function()
-                local off = -0.5
-                while loadingLayer.Parent and not loadingComplete and tag.Parent do
-                    off = off + 0.009; if off > 1.5 then off = -0.5 end
-                    tagGrad.Offset = Vector2.new(off, 0)
-                    task.wait()
-                end
-            end)
-            task.wait(math.clamp(loadingDuration * 0.5, 0.4, 2.5))
-            loadingMotionComplete = true
-        end)
-    end
-
-    -- ── MAIN WINDOW ───────────────────────────────────────────────────────
-    local main = make("Frame", {
-        Name = "Main", Size = windowSize,
-        Position = UDim2.fromOffset(0, 0),
-        BackgroundColor3 = C.WindowBg, ClipsDescendants = true,
-        Visible = not loadingEnabled, ZIndex = 2, Parent = container,
-    })
-    corner(main, 12); stroke(main, C.Border)
-
-    -- Animated traveling outline
-    local mainGlowStroke = make("UIStroke", {
-        Color = C.Accent,
-        Thickness = 1.6,
-        ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-        Transparency = 0,
-        Parent = main,
-    })
-    local mainGlowGradient = make("UIGradient", {
-        Color = ColorSequence.new({
-            ColorSequenceKeypoint.new(0.00, C.Accent),
-            ColorSequenceKeypoint.new(0.42, C.Accent),
-            ColorSequenceKeypoint.new(0.50, Color3.fromRGB(255, 255, 255)),
-            ColorSequenceKeypoint.new(0.58, C.Accent),
-            ColorSequenceKeypoint.new(1.00, C.Accent),
-        }),
-        Transparency = NumberSequence.new({
-            NumberSequenceKeypoint.new(0.00, 1.0),
-            NumberSequenceKeypoint.new(0.36, 1.0),
-            NumberSequenceKeypoint.new(0.50, 0.0),
-            NumberSequenceKeypoint.new(0.64, 1.0),
-            NumberSequenceKeypoint.new(1.00, 1.0),
-        }),
-        Parent = mainGlowStroke,
-    })
-    mainGlowGradient:SetAttribute("ThemeGradient_Edge", "Accent")
-    local mainRevealScale = make("UIScale", { Scale = loadingEnabled and 0.965 or 1, Parent = main })
-    -- Assigned further down, once the sidebar watermark exists. Driving the logo
-    -- outline from this same loop keeps it in phase with the window glow.
-    local logoGlowGradient
-    local brandShimmerGradient
-    local glowT = 0
-    local glowConn
-    glowConn = RunService.RenderStepped:Connect(function(dt)
-        if not main or not main.Parent then
-            if glowConn then glowConn:Disconnect(); glowConn = nil end
-            return
-        end
-        glowT = (glowT + dt * 0.35) % 1
-        local offset = Vector2.new(glowT * 2 - 1, 0)
-        mainGlowGradient.Offset = offset
-        if logoGlowGradient then logoGlowGradient.Offset = offset end
-        if brandShimmerGradient then brandShimmerGradient.Offset = offset end
-    end)
-
-    -- ── HOTBAR ────────────────────────────────────────────────────────────
-    local hotbar = make("Frame", {
-        Name = "TabHotbar",
-        AnchorPoint = Vector2.new(0.5, 0),
-        Position = UDim2.new(0.5, 0, 0, windowSize.Y.Offset + HOTBAR_GAP),
-        Size = UDim2.fromOffset(0, HOTBAR_HEIGHT),
-        AutomaticSize = Enum.AutomaticSize.X,
-        BackgroundColor3 = C.HotbarBg,
-        ClipsDescendants = false,
-        Visible = not loadingEnabled,
-        ZIndex = 3, Parent = container,
-    })
-    corner(hotbar, 11)
-    -- Border is white and driven entirely by the gradient below: accent at the
-    -- left and right ends, normal border colour through the middle. The
-    -- Theme_Color tag has to go, otherwise SetTheme would repaint the white
-    -- base and dim the whole gradient (it multiplies, it does not replace).
-    local hotbarStroke = make("UIStroke", {
-        Color = Color3.fromRGB(255, 255, 255), Thickness = 1,
-        ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Parent = hotbar,
-    })
-    hotbarStroke:SetAttribute("Theme_Color", nil)
-    edgeAccentGradient(hotbarStroke, "Accent", "HotbarBorder", 0.15)
-    pad(hotbar, 5, 5, 10, 10)
-
-    local hotbarInner = make("Frame", {
-        Name = "HotbarInner",
-        Size = UDim2.new(0, 0, 1, 0),
-        AutomaticSize = Enum.AutomaticSize.X,
-        BackgroundTransparency = 1, ZIndex = 4, Parent = hotbar,
-    })
-    make("UIListLayout", {
-        FillDirection = Enum.FillDirection.Horizontal,
-        VerticalAlignment = Enum.VerticalAlignment.Center,
-        HorizontalAlignment = Enum.HorizontalAlignment.Center,
-        SortOrder = Enum.SortOrder.LayoutOrder,
-        Padding = UDim.new(0, 4), Parent = hotbarInner,
-    })
-
-    local minimized = false
-    local mainTopButtons = {}
-    local burgerButton
-    local windowRef
-    local noDrag = {}
-    table.insert(noDrag, hotbar)
-
-    local function setMinimized(o)
-        minimized = o == true
-        for _, b in ipairs(mainTopButtons) do if b and b.Parent then b.Visible = not minimized end end
-        if burgerButton and burgerButton.Parent then burgerButton.Visible = minimized end
-        main.Visible = not minimized
-        hotbar.Visible = not minimized
-        if windowRef then windowRef._minimized = minimized end
-    end
-
-    local controls = make("Frame", {
-        Name = "CornerControls", AnchorPoint = Vector2.new(1,0),
-        Position = UDim2.new(1,-6,0,8), Size = UDim2.fromOffset(36,16),
-        BackgroundTransparency = 1, ZIndex = 10, Parent = main,
-    })
-    local closeBtn = make("TextButton", {
-        Text = "", Font = Enum.Font.GothamBold, TextSize = 1, TextColor3 = C.White,
-        AnchorPoint = Vector2.new(1,0), Position = UDim2.new(1,0,0,0),
-        Size = UDim2.fromOffset(14,14), BackgroundColor3 = Color3.fromRGB(190,60,60),
-        ZIndex = 12, Parent = controls,
-    })
-    closeBtn.AutoButtonColor = false; circle(closeBtn); closeBtn.BorderSizePixel = 0
-    local minimizeBtn = make("TextButton", {
-        Text = "", Font = Enum.Font.GothamBold, TextSize = 1, TextColor3 = C.White,
-        AnchorPoint = Vector2.new(1,0), Position = UDim2.new(0,12,0,0),
-        Size = UDim2.fromOffset(14,14), BackgroundColor3 = Color3.fromRGB(255,195,0),
-        ZIndex = 12, Parent = controls,
-    })
-    minimizeBtn.AutoButtonColor = false; circle(minimizeBtn); minimizeBtn.BorderSizePixel = 0
-    table.insert(mainTopButtons, closeBtn); table.insert(mainTopButtons, minimizeBtn)
-    table.insert(noDrag, closeBtn); table.insert(noDrag, minimizeBtn)
-
-    burgerButton = make("TextButton", {
-        Text = "", Font = Enum.Font.GothamBold, TextSize = 13, TextColor3 = C.White,
-        AnchorPoint = Vector2.new(1,0), Position = UDim2.new(1,-12,0,12),
-        Size = UDim2.fromOffset(34,18), BackgroundColor3 = C.CardBg,
-        Visible = false, ZIndex = 11, Parent = screenGui,
-    })
-    corner(burgerButton, 10); stroke(burgerButton, C.Border)
-    local bih = make("Frame", { BackgroundTransparency=1, Position=UDim2.fromOffset(6,0), Size=UDim2.fromOffset(18,18), Parent=burgerButton, ZIndex=12 })
-    make("Frame",{BackgroundColor3=C.White,Size=UDim2.fromOffset(12,2),Position=UDim2.fromOffset(3,4), Parent=bih,ZIndex=13})
-    make("Frame",{BackgroundColor3=C.White,Size=UDim2.fromOffset(12,2),Position=UDim2.fromOffset(3,8), Parent=bih,ZIndex=13})
-    make("Frame",{BackgroundColor3=C.White,Size=UDim2.fromOffset(12,2),Position=UDim2.fromOffset(3,12),Parent=bih,ZIndex=13})
-    make("ImageLabel",{Name="BurgerLogo",Image=logoAsset,BackgroundTransparency=1,Position=UDim2.fromOffset(26,5),Size=UDim2.fromOffset(8,8),ZIndex=14,ScaleType=Enum.ScaleType.Fit,Parent=burgerButton})
-
-    burgerButton.MouseButton1Click:Connect(function() setMinimized(false) end)
-    closeBtn.MouseButton1Click:Connect(function()
-        if windowRef and windowRef.Destroy then windowRef:Destroy()
-        else if screenGui then screenGui:Destroy() end end
-    end)
-    minimizeBtn.MouseButton1Click:Connect(function() setMinimized(true) end)
-    local onDragStart, onDragEnd
-    local dragConn = makeDraggable(container, noDrag,
-        function() if onDragStart then onDragStart() end end,
-        function() if onDragEnd then onDragEnd() end end)
-
-    -- ── SIDEBAR ───────────────────────────────────────────────────────────
-    local sidebar = make("Frame", { Size=UDim2.new(0,190,1,0), BackgroundTransparency=1, Parent=main })
-    local brand = make("Frame", { Name="Brand", Position=UDim2.fromOffset(12,12), Size=UDim2.new(1,-24,0,64), BackgroundColor3=C.White, Parent=sidebar })
-    corner(brand,10); stroke(brand,C.Border)
-    -- Smooth light-blue to gray transition over the whole card, blue at the
-    -- bottom. The blue is muted (Strength < 1 blends it back toward the gray)
-    -- so it stays a subtle tint. The frame must be white because a UIGradient
-    -- multiplies the object's own colour instead of replacing it; the actual
-    -- colours live on the gradient, so it still follows theme changes.
-    brand:SetAttribute("Theme_BackgroundColor3", nil)
-    local brandGrad = make("UIGradient", { Rotation = 90, Parent = brand })
-    brandGrad:SetAttribute("ThemeGradient_Top", "CardBg")
-    brandGrad:SetAttribute("ThemeGradient_Bottom", "Accent")
-    brandGrad:SetAttribute("ThemeGradient_Strength", 0.5)
-    refreshVerticalFade(brandGrad)
-    -- Blue-white shimmer: a soft whitish band sweeps across the card along the
-    -- bottom-left to top-right diagonal, in phase with the window glow (same
-    -- cycle, same offset). Sits at ZIndex 0 so the logo and text stay crisp.
-    local brandShimmer = make("Frame", {
-        Name = "Shimmer", Size = UDim2.fromScale(1, 1), ZIndex = 0,
-        BackgroundColor3 = Color3.fromRGB(210, 225, 255), Parent = brand,
-    })
-    corner(brandShimmer, 10)
-    brandShimmerGradient = make("UIGradient", {
-        Rotation = 45,
-        Color = ColorSequence.new({
-            ColorSequenceKeypoint.new(0.00, C.Accent),
-            ColorSequenceKeypoint.new(0.42, C.Accent),
-            ColorSequenceKeypoint.new(0.50, Color3.fromRGB(255, 255, 255)),
-            ColorSequenceKeypoint.new(0.58, C.Accent),
-            ColorSequenceKeypoint.new(1.00, C.Accent),
-        }),
-        Transparency = NumberSequence.new({
-            NumberSequenceKeypoint.new(0.00, 1.0),
-            NumberSequenceKeypoint.new(0.38, 1.0),
-            NumberSequenceKeypoint.new(0.50, 0.55),
-            NumberSequenceKeypoint.new(0.62, 1.0),
-            NumberSequenceKeypoint.new(1.00, 1.0),
-        }),
-        Parent = brandShimmer,
-    })
-    brandShimmerGradient:SetAttribute("ThemeGradient_Edge", "Accent")
-    -- The logo holder clips, and the image inside is scaled up by `logoZoom`.
-    -- This exists because the default logo asset has a lot of transparent
-    -- padding — with ScaleType.Fit the visible mark would only fill ~35% of
-    -- the box. Custom logos are usually tightly cropped, so they get no zoom
-    -- unless the caller opts in via `LogoZoom`.
-    local logoHolder = make("Frame", { Position=UDim2.fromOffset(9,9), Size=UDim2.fromOffset(46,46), BackgroundTransparency=1, ClipsDescendants=true, Parent=brand })
-    local brandLogo = make("ImageLabel",{Name="Logo",Image=logoAsset,BackgroundTransparency=1,AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.5,0.5),Size=UDim2.fromScale(logoZoom,logoZoom),ScaleType=Enum.ScaleType.Fit,Parent=logoHolder})
-    make("TextLabel",{Text=opts.Name or "Oxidelib",Font=Enum.Font.GothamBold,TextSize=13,TextColor3=C.White,TextXAlignment=Enum.TextXAlignment.Left,TextTruncate=Enum.TextTruncate.AtEnd,BackgroundTransparency=1,Position=UDim2.fromOffset(64,16),Size=UDim2.new(1,-72,0,17),Parent=brand})
-    make("TextLabel",{Text=opts.BrandSubtitle or ("Oxidelib v"..Library.Version),Font=Enum.Font.GothamMedium,TextSize=9,TextColor3=C.TextDim,TextXAlignment=Enum.TextXAlignment.Left,TextTruncate=Enum.TextTruncate.AtEnd,BackgroundTransparency=1,Position=UDim2.fromOffset(64,35),Size=UDim2.new(1,-72,0,13),Parent=brand})
-
-    -- Player mini-card (fills the sidebar and gives identity at a glance)
-    local lp = Players.LocalPlayer
-    local pcard = make("Frame",{Name="PlayerCard",Position=UDim2.fromOffset(12,88),Size=UDim2.new(1,-24,0,52),BackgroundColor3=C.CardBg,Parent=sidebar})
-    corner(pcard,10); stroke(pcard,C.Border)
-    local avH = make("Frame",{Position=UDim2.fromOffset(8,8),Size=UDim2.fromOffset(36,36),BackgroundColor3=C.Element,Parent=pcard}); corner(avH,8)
-    local avImg = make("ImageLabel",{Image="rbxthumb://type=AvatarHeadShot&id="..lp.UserId.."&w=150&h=150",BackgroundTransparency=1,Size=UDim2.fromScale(1,1),ScaleType=Enum.ScaleType.Crop,Parent=avH}); corner(avImg,8)
-    local avRing = stroke(avH,C.Accent); avRing.Transparency=0.4
-    make("TextLabel",{Text=lp.DisplayName,Font=Enum.Font.GothamBold,TextSize=12,TextColor3=C.White,TextXAlignment=Enum.TextXAlignment.Left,TextTruncate=Enum.TextTruncate.AtEnd,BackgroundTransparency=1,Position=UDim2.fromOffset(52,10),Size=UDim2.new(1,-60,0,15),Parent=pcard})
-    make("TextLabel",{Text="@"..lp.Name,Font=Enum.Font.Gotham,TextSize=10,TextColor3=C.TextDim,TextXAlignment=Enum.TextXAlignment.Left,TextTruncate=Enum.TextTruncate.AtEnd,BackgroundTransparency=1,Position=UDim2.fromOffset(52,28),Size=UDim2.new(1,-60,0,13),Parent=pcard})
-
-    -- Faint centered logo watermark fills the otherwise empty sidebar space
-    local watermarkHolder = make("Frame",{Name="Watermark",BackgroundTransparency=1,ClipsDescendants=true,AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.new(0.5,0,0.5,24),Size=UDim2.fromOffset(156,156),ZIndex=0,Parent=sidebar})
-
-    -- ── Travelling outline around the logo silhouette ─────────────────────
-    -- UIStroke cannot trace an image's alpha (ApplyStrokeMode only covers text
-    -- or the rectangular border), so the outline is the union of copies of the
-    -- logo pushed outward in a ring. They sit inside a CanvasGroup, which
-    -- flattens the overlaps into one solid silhouette — stacking them directly
-    -- would compound their alpha into a muddy halo. An opaque
-    -- background-coloured copy on top then cuts the interior away, leaving only
-    -- the rim, and a travelling gradient band runs light along it in phase with
-    -- the window outline.
-    local logoGlowOn = opts.LogoGlow ~= false
-    local outlineGroup
-    if logoGlowOn then
-        -- The CanvasGroup is what keeps this from looking like a halo, so if the
-        -- class is unavailable the effect is dropped rather than degraded.
-        local built, group = pcall(function()
-            return make("CanvasGroup", {
-                Name = "OutlineGroup", BackgroundTransparency = 1,
-                Size = UDim2.fromScale(1, 1), ZIndex = 1, Parent = watermarkHolder,
-            })
-        end)
-        if built and group then outlineGroup = group else logoGlowOn = false end
-    end
-
-    if logoGlowOn then
-        local RING_STEPS = 16     -- at a 2.5px push this keeps the rim gap-free
-        local RING_PUSH  = 2.5    -- outline thickness in pixels
-        for i = 1, RING_STEPS do
-            local ang = (i - 1) / RING_STEPS * math.pi * 2
-            make("ImageLabel", {
-                Name = "RingStep" .. i, Image = logoAsset,
-                BackgroundTransparency = 1, ImageTransparency = 0,
-                AnchorPoint = Vector2.new(0.5, 0.5),
-                Position = UDim2.new(0.5, math.cos(ang) * RING_PUSH, 0.5, math.sin(ang) * RING_PUSH),
-                Size = UDim2.fromScale(logoZoom, logoZoom),
-                ScaleType = Enum.ScaleType.Fit, Parent = outlineGroup,
-            })
-        end
-        -- Colour and fade both come from the gradient, so the rim is accent at
-        -- rest and whitens at the crest of the band.
-        logoGlowGradient = make("UIGradient", {
-            Color = ColorSequence.new({
-                ColorSequenceKeypoint.new(0.00, C.Accent),
-                ColorSequenceKeypoint.new(0.42, C.Accent),
-                ColorSequenceKeypoint.new(0.50, Color3.fromRGB(255, 255, 255)),
-                ColorSequenceKeypoint.new(0.58, C.Accent),
-                ColorSequenceKeypoint.new(1.00, C.Accent),
-            }),
-            Transparency = NumberSequence.new({
-                NumberSequenceKeypoint.new(0.00, 0.88),
-                NumberSequenceKeypoint.new(0.40, 0.88),
-                NumberSequenceKeypoint.new(0.50, 0.10),
-                NumberSequenceKeypoint.new(0.60, 0.88),
-                NumberSequenceKeypoint.new(1.00, 0.88),
-            }),
-            Parent = outlineGroup,
-        })
-        logoGlowGradient:SetAttribute("ThemeGradient_Edge", "Accent")
-
-        -- Sits outside the CanvasGroup so the travelling gradient cannot tint it
-        -- and make the logo interior show up against the background.
-        local watermarkMask = make("ImageLabel", {
-            Name = "WatermarkMask", Image = logoAsset, BackgroundTransparency = 1,
-            ImageColor3 = C.WindowBg, ImageTransparency = 0,
-            AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
-            Size = UDim2.fromScale(logoZoom, logoZoom),
-            ScaleType = Enum.ScaleType.Fit, ZIndex = 2, Parent = watermarkHolder,
-        })
-        watermarkMask:SetAttribute("Theme_ImageColor3", "WindowBg")
-    end
-
-    local watermark = make("ImageLabel",{Name="WatermarkImage",Image=logoAsset,BackgroundTransparency=1,ImageTransparency=0.9,AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.5,0.5),Size=UDim2.fromScale(logoZoom,logoZoom),ScaleType=Enum.ScaleType.Fit,ZIndex=3,Parent=watermarkHolder})
-
-    local statusDot = make("Frame",{AnchorPoint=Vector2.new(0,0.5),Position=UDim2.new(0,16,1,-19),Size=UDim2.fromOffset(6,6),BackgroundColor3=NOTIFICATION_STYLES.success.Color,Parent=sidebar})
-    circle(statusDot)
-    make("TextLabel",{Text=opts.StatusText or "Oxidelib is ready",Font=Enum.Font.GothamMedium,TextSize=10,TextColor3=C.TextDim,TextXAlignment=Enum.TextXAlignment.Left,BackgroundTransparency=1,Position=UDim2.new(0,28,1,-27),Size=UDim2.new(1,-40,0,16),Parent=sidebar})
-    local divLine=make("Frame",{Position=UDim2.fromOffset(190,0),Size=UDim2.new(0,1,1,0),BackgroundColor3=C.Accent,Parent=main})
-    make("UIGradient",{Rotation=90,Transparency=NumberSequence.new({NumberSequenceKeypoint.new(0,1),NumberSequenceKeypoint.new(0.5,0.5),NumberSequenceKeypoint.new(1,1)}),Parent=divLine})
-    local content = make("Frame",{Position=UDim2.fromOffset(191,0),Size=UDim2.new(1,-191,1,0),BackgroundTransparency=1,Parent=main})
-
-    -- ── DRAG FADE: smoothly hide inner content while dragging the window ──
-    -- The window frame (background + border + traveling glow) stays visible;
-    -- everything inside (sidebar, divider, content, corner controls) fades out.
-    local DRAG_FADE_TWEEN = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-    local fadeRoots = { controls, sidebar, divLine, content }
-    local fadeOrig  = {}        -- [inst] = { [prop] = originalValue }
-    local innerHidden = false
-    local FADE_PROPS = {
-        { prop = "BackgroundTransparency",     test = function(d) return d:IsA("GuiObject") end },
-        { prop = "TextTransparency",           test = function(d) return d:IsA("TextLabel") or d:IsA("TextButton") or d:IsA("TextBox") end },
-        { prop = "ImageTransparency",          test = function(d) return d:IsA("ImageLabel") or d:IsA("ImageButton") end },
-        { prop = "ScrollBarImageTransparency", test = function(d) return d:IsA("ScrollingFrame") end },
-        { prop = "Transparency",               test = function(d) return d:IsA("UIStroke") end },
-    }
-    local function eachFadeInst(fn)
-        for _, root in ipairs(fadeRoots) do
-            if root and root.Parent then
-                fn(root)
-                for _, d in ipairs(root:GetDescendants()) do fn(d) end
-            end
-        end
-    end
-    local function setInnerHidden(hide)
-        if hide == innerHidden then return end
-        innerHidden = hide
-        eachFadeInst(function(d)
-            for _, entry in ipairs(FADE_PROPS) do
-                if entry.test(d) then
-                    local prop = entry.prop
-                    if hide then
-                        local cur = d[prop]
-                        if cur < 1 then
-                            fadeOrig[d] = fadeOrig[d] or {}
-                            if fadeOrig[d][prop] == nil then fadeOrig[d][prop] = cur end
-                            TweenService:Create(d, DRAG_FADE_TWEEN, { [prop] = 1 }):Play()
-                        end
-                    else
-                        local o = fadeOrig[d]
-                        if o and o[prop] ~= nil then
-                            TweenService:Create(d, DRAG_FADE_TWEEN, { [prop] = o[prop] }):Play()
-                        end
-                    end
-                end
-            end
-        end)
-    end
-    onDragStart = function() setInnerHidden(true) end
-    onDragEnd   = function() setInnerHidden(false) end
-
-    -- ── NOTIFICATIONS ─────────────────────────────────────────────────────
-    local notificationHolder = make("Frame",{
-        Name="Notifications",AnchorPoint=Vector2.new(1,0),
-        Position=UDim2.new(1,-16,0,16),Size=UDim2.new(0,300,1,-32),
-        BackgroundTransparency=1,ZIndex=200,Parent=screenGui,
-    })
-    make("UIListLayout",{FillDirection=Enum.FillDirection.Vertical,HorizontalAlignment=Enum.HorizontalAlignment.Right,SortOrder=Enum.SortOrder.LayoutOrder,Padding=UDim.new(0,6),Parent=notificationHolder})
-
-    -- ── PROFILE + PERFORMANCE ─────────────────────────────────────────────
-    local localPlayer      = Players.LocalPlayer
-    local profileKey       = typeof(opts.ProfileKey)=="EnumItem" and opts.ProfileKey or Enum.KeyCode.K
-    local toggleKey        = (opts.ToggleKey==false) and nil or (typeof(opts.ToggleKey)=="EnumItem" and opts.ToggleKey or Enum.KeyCode.RightShift)
-    local profileWidth     = math.max(280, tonumber(opts.ProfileWidth) or 312)
-    local bottomMargin     = math.max(10,  tonumber(opts.ProfileBottomMargin) or 18)
-    local profileOpenPos   = UDim2.new(1,-18,1,-bottomMargin)
-    local profileClosedPos = UDim2.new(1,profileWidth+28,1,-bottomMargin)
-    local profileOpen      = false
-
-    -- Music player (built below) — forward declared so the header toggle
-    -- button and setProfileVisible can reference them.
-    local toggleMusic            -- assigned when the music panel is built
-    local closeMusic             -- assigned when the music panel is built
-    local musicConns    = {}     -- connections appended to windowRef._connections
-
-    local profilePanel = make("CanvasGroup",{Name="UserProfile",AnchorPoint=Vector2.new(1,1),Position=profileClosedPos,Size=UDim2.fromOffset(profileWidth,382),BackgroundColor3=C.CardBg,GroupTransparency=1,ClipsDescendants=true,ZIndex=150,Parent=screenGui})
-    corner(profilePanel,14)
-    local profileHeader=make("Frame",{Position=UDim2.fromOffset(0,0),Size=UDim2.new(1,0,0,65),BackgroundTransparency=1,ZIndex=151,Parent=profilePanel})
-    make("TextLabel",{Text=opts.ProfileTitle or "PLAYER PROFILE",Font=Enum.Font.GothamBold,TextSize=13,TextColor3=C.White,TextXAlignment=Enum.TextXAlignment.Left,BackgroundTransparency=1,Position=UDim2.fromOffset(18,13),Size=UDim2.new(1,-36,0,18),ZIndex=152,Parent=profileHeader})
-    make("TextLabel",{Text="Live session overview",Font=Enum.Font.Gotham,TextSize=10,TextColor3=C.TextDim,TextXAlignment=Enum.TextXAlignment.Left,BackgroundTransparency=1,Position=UDim2.fromOffset(18,34),Size=UDim2.new(1,-36,0,15),ZIndex=152,Parent=profileHeader})
-    make("Frame",{Position=UDim2.new(0,18,1,-1),Size=UDim2.new(1,-36,0,1),BackgroundColor3=C.Border,ZIndex=151,Parent=profileHeader})
-    -- Music player toggle (sits to the right of the PLAYER PROFILE title)
-    local musicToggleBtn=make("TextButton",{Name="MusicToggle",Text="",AutoButtonColor=false,AnchorPoint=Vector2.new(1,0),Position=UDim2.new(1,-16,0,14),Size=UDim2.fromOffset(34,34),BackgroundColor3=C.Element,ZIndex=153,Parent=profileHeader})
-    corner(musicToggleBtn,9);stroke(musicToggleBtn,C.Border)
-    local musicToggleIcon=make("ImageLabel",{Image=ICONS.music,BackgroundTransparency=1,AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.5,0.5),Size=UDim2.fromOffset(16,16),ImageColor3=C.TextGray,ZIndex=154,Parent=musicToggleBtn})
-    musicToggleBtn.MouseButton1Click:Connect(function() if toggleMusic then toggleMusic() end end)
-    local identityCard=make("Frame",{Position=UDim2.fromOffset(16,82),Size=UDim2.new(1,-32,0,116),BackgroundColor3=C.Element,ZIndex=151,Parent=profilePanel})
-    corner(identityCard,11);stroke(identityCard,C.Border)
-    local avatarHolder=make("Frame",{AnchorPoint=Vector2.new(0,0.5),Position=UDim2.new(0,14,0.5,0),Size=UDim2.fromOffset(76,76),BackgroundColor3=C.Badge,ZIndex=152,Parent=identityCard})
-    circle(avatarHolder);stroke(avatarHolder,C.Border)
-    local avatar=make("ImageLabel",{Name="Avatar",Image="",BackgroundTransparency=1,Position=UDim2.fromOffset(4,4),Size=UDim2.new(1,-8,1,-8),ScaleType=Enum.ScaleType.Crop,ZIndex=153,Parent=avatarHolder})
-    circle(avatar)
-    local onlineRing=make("Frame",{AnchorPoint=Vector2.new(1,1),Position=UDim2.new(1,0,1,0),Size=UDim2.fromOffset(18,18),BackgroundColor3=C.Element,ZIndex=154,Parent=avatarHolder})
-    circle(onlineRing)
-    local onlineDot=make("Frame",{AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.5,0.5),Size=UDim2.fromOffset(10,10),BackgroundColor3=NOTIFICATION_STYLES.success.Color,ZIndex=155,Parent=onlineRing})
-    circle(onlineDot)
-    make("TextLabel",{Text=localPlayer and localPlayer.DisplayName or "Player",Font=Enum.Font.GothamBold,TextSize=17,TextColor3=C.White,TextXAlignment=Enum.TextXAlignment.Left,TextTruncate=Enum.TextTruncate.AtEnd,BackgroundTransparency=1,Position=UDim2.fromOffset(105,22),Size=UDim2.new(1,-119,0,23),ZIndex=152,Parent=identityCard})
-    make("TextLabel",{Text=localPlayer and ("@"..localPlayer.Name) or "@unknown",Font=Enum.Font.GothamMedium,TextSize=11,TextColor3=C.TextDim,TextXAlignment=Enum.TextXAlignment.Left,TextTruncate=Enum.TextTruncate.AtEnd,BackgroundTransparency=1,Position=UDim2.fromOffset(105,47),Size=UDim2.new(1,-119,0,16),ZIndex=152,Parent=identityCard})
-    local connectedBadge=make("Frame",{Position=UDim2.fromOffset(105,74),Size=UDim2.fromOffset(92,24),BackgroundColor3=C.BadgeIdle,ZIndex=152,Parent=identityCard})
-    corner(connectedBadge,7)
-    local connectedDot=make("Frame",{AnchorPoint=Vector2.new(0,0.5),Position=UDim2.new(0,9,0.5,0),Size=UDim2.fromOffset(6,6),BackgroundColor3=NOTIFICATION_STYLES.success.Color,ZIndex=153,Parent=connectedBadge})
-    circle(connectedDot)
-    make("TextLabel",{Text="CONNECTED",Font=Enum.Font.GothamBold,TextSize=8,TextColor3=C.TextGray,TextXAlignment=Enum.TextXAlignment.Left,BackgroundTransparency=1,Position=UDim2.fromOffset(22,0),Size=UDim2.new(1,-27,1,0),ZIndex=153,Parent=connectedBadge})
-    make("TextLabel",{Text="ACCOUNT DETAILS",Font=Enum.Font.GothamBold,TextSize=10,TextColor3=C.TextDim,TextXAlignment=Enum.TextXAlignment.Left,BackgroundTransparency=1,Position=UDim2.fromOffset(18,216),Size=UDim2.new(1,-36,0,16),ZIndex=152,Parent=profilePanel})
-    local details=make("Frame",{Position=UDim2.fromOffset(16,240),Size=UDim2.new(1,-32,0,126),BackgroundColor3=C.Element,ZIndex=151,Parent=profilePanel})
-    corner(details,11);stroke(details,C.Border)
-    local function addProfileDetail(index,labelText,valueText)
-        local y=(index-1)*42
-        local row=make("Frame",{Position=UDim2.fromOffset(0,y),Size=UDim2.new(1,0,0,42),BackgroundTransparency=1,ZIndex=152,Parent=details})
-        make("TextLabel",{Text=labelText,Font=Enum.Font.GothamMedium,TextSize=10,TextColor3=C.TextDim,TextXAlignment=Enum.TextXAlignment.Left,BackgroundTransparency=1,Position=UDim2.fromOffset(16,0),Size=UDim2.new(0.46,-16,1,0),ZIndex=153,Parent=row})
-        local vl=make("TextLabel",{Text=valueText,Font=Enum.Font.GothamMedium,TextSize=11,TextColor3=C.White,TextXAlignment=Enum.TextXAlignment.Right,TextTruncate=Enum.TextTruncate.AtEnd,BackgroundTransparency=1,Position=UDim2.new(0.46,0,0,0),Size=UDim2.new(0.54,-16,1,0),ZIndex=153,Parent=row})
-        if index<3 then make("Frame",{Position=UDim2.new(0,16,1,-1),Size=UDim2.new(1,-32,0,1),BackgroundColor3=C.Border,ZIndex=153,Parent=row}) end
-        return vl
-    end
-    addProfileDetail(1,"USER ID",   localPlayer and tostring(localPlayer.UserId) or "N/A")
-    addProfileDetail(2,"ACCOUNT AGE",localPlayer and (tostring(localPlayer.AccountAge).." days") or "N/A")
-    local pingLabel=addProfileDetail(3,"PING","-- ms")
-
-    local performanceWidth     = math.max(236,tonumber(opts.PerformanceWidth) or 266)
-    local performanceHeight    = math.max(260,tonumber(opts.PerformanceHeight) or 294)
-    local panelGap             = math.max(8,  tonumber(opts.ProfilePanelGap) or 12)
-    local performanceOpenPos   = UDim2.new(1,-(18+profileWidth+panelGap),1,-bottomMargin)
-    local performanceClosedPos = UDim2.new(1,performanceWidth+36,1,-bottomMargin)
-
-    local performancePanel=make("CanvasGroup",{Name="LivePerformance",AnchorPoint=Vector2.new(1,1),Position=performanceClosedPos,Size=UDim2.fromOffset(performanceWidth,performanceHeight),BackgroundColor3=C.CardBg,GroupTransparency=1,ClipsDescendants=true,ZIndex=149,Parent=screenGui})
-    corner(performancePanel,14)
-    local performanceHeader=make("Frame",{Size=UDim2.new(1,0,0,56),BackgroundTransparency=1,ZIndex=150,Parent=performancePanel})
-    make("TextLabel",{Text=opts.PerformanceTitle or "LIVE PERFORMANCE",Font=Enum.Font.GothamBold,TextSize=12,TextColor3=C.White,TextXAlignment=Enum.TextXAlignment.Left,BackgroundTransparency=1,Position=UDim2.fromOffset(16,11),Size=UDim2.new(1,-94,0,17),ZIndex=151,Parent=performanceHeader})
-    make("TextLabel",{Text="Real-time frame tracker",Font=Enum.Font.Gotham,TextSize=9,TextColor3=C.TextDim,TextXAlignment=Enum.TextXAlignment.Left,BackgroundTransparency=1,Position=UDim2.fromOffset(16,31),Size=UDim2.new(1,-94,0,13),ZIndex=151,Parent=performanceHeader})
-    local liveBadge=make("Frame",{AnchorPoint=Vector2.new(1,0),Position=UDim2.new(1,-14,0,14),Size=UDim2.fromOffset(58,20),BackgroundColor3=C.BadgeIdle,ZIndex=151,Parent=performanceHeader})
-    corner(liveBadge,6)
-    local liveDot=make("Frame",{AnchorPoint=Vector2.new(0,0.5),Position=UDim2.new(0,8,0.5,0),Size=UDim2.fromOffset(5,5),BackgroundColor3=NOTIFICATION_STYLES.success.Color,ZIndex=152,Parent=liveBadge})
-    circle(liveDot)
-    make("TextLabel",{Text="LIVE",Font=Enum.Font.GothamBold,TextSize=8,TextColor3=C.TextGray,TextXAlignment=Enum.TextXAlignment.Left,BackgroundTransparency=1,Position=UDim2.fromOffset(19,0),Size=UDim2.new(1,-23,1,0),ZIndex=152,Parent=liveBadge})
-    local fpsSummary=make("Frame",{Position=UDim2.fromOffset(14,58),Size=UDim2.new(1,-28,0,56),BackgroundColor3=C.Element,ZIndex=150,Parent=performancePanel})
-    corner(fpsSummary,10);stroke(fpsSummary,C.Border)
-    make("TextLabel",{Text="FPS",Font=Enum.Font.GothamBold,TextSize=8,TextColor3=C.TextDim,TextXAlignment=Enum.TextXAlignment.Left,BackgroundTransparency=1,Position=UDim2.fromOffset(12,8),Size=UDim2.new(0.5,-12,0,11),ZIndex=151,Parent=fpsSummary})
-    local currentFpsLabel=make("TextLabel",{Text="--",Font=Enum.Font.GothamBold,TextSize=23,TextColor3=C.White,TextXAlignment=Enum.TextXAlignment.Left,BackgroundTransparency=1,Position=UDim2.fromOffset(12,21),Size=UDim2.new(0.5,-12,0,28),ZIndex=151,Parent=fpsSummary})
-    make("TextLabel",{Text="FRAME TIME",Font=Enum.Font.GothamBold,TextSize=8,TextColor3=C.TextDim,TextXAlignment=Enum.TextXAlignment.Right,BackgroundTransparency=1,Position=UDim2.new(0.5,0,0,8),Size=UDim2.new(0.5,-12,0,11),ZIndex=151,Parent=fpsSummary})
-    local frameTimeLabel=make("TextLabel",{Text="-- ms",Font=Enum.Font.GothamMedium,TextSize=12,TextColor3=C.White,TextXAlignment=Enum.TextXAlignment.Right,BackgroundTransparency=1,Position=UDim2.new(0.5,0,0,26),Size=UDim2.new(0.5,-12,0,18),ZIndex=151,Parent=fpsSummary})
-    make("TextLabel",{Text="FRAME HISTORY",Font=Enum.Font.GothamBold,TextSize=9,TextColor3=C.TextDim,TextXAlignment=Enum.TextXAlignment.Left,BackgroundTransparency=1,Position=UDim2.fromOffset(16,126),Size=UDim2.new(1,-32,0,13),ZIndex=150,Parent=performancePanel})
-    local graphCard=make("Frame",{Position=UDim2.fromOffset(14,145),Size=UDim2.new(1,-28,0,82),BackgroundColor3=C.Element,ClipsDescendants=true,ZIndex=150,Parent=performancePanel})
-    corner(graphCard,10);stroke(graphCard,C.Border)
-    local graphPlot=make("Frame",{Position=UDim2.fromOffset(10,9),Size=UDim2.new(1,-20,1,-18),BackgroundTransparency=1,ClipsDescendants=true,ZIndex=151,Parent=graphCard})
-    for i=1,2 do make("Frame",{Position=UDim2.new(0,0,i/3,0),Size=UDim2.new(1,0,0,1),BackgroundColor3=C.Border,BackgroundTransparency=0.35,ZIndex=151,Parent=graphPlot}) end
-    local maxFpsSamples=48; local fpsSamples={}
-    local graphPixelSize=Vector2.new(math.max(2,math.floor(performanceWidth-48)),64)
-    local graphImage=make("ImageLabel",{Name="ContinuousFpsLine",BackgroundTransparency=1,Position=UDim2.fromOffset(0,0),Size=UDim2.fromScale(1,1),ScaleType=Enum.ScaleType.Stretch,ResampleMode=Enum.ResamplerMode.Default,ZIndex=153,Parent=graphPlot})
-    local fpsEditableImage=nil; local graphSegments={}; local editableImageReady=false; local supportsAA=true
-    local function ensureFallback()
-        if #graphSegments>0 then return end; graphImage.Visible=false
-        for i=1,maxFpsSamples-1 do
-            local seg=make("Frame",{Name="FL"..i,AnchorPoint=Vector2.new(0,0.5),Position=UDim2.fromOffset(0,0),Size=UDim2.fromOffset(0,1),BackgroundColor3=C.White,BorderSizePixel=0,Visible=false,ZIndex=153,Parent=graphPlot})
-            graphSegments[i]=seg
-        end
-    end
-    do
-        local ok,ed=pcall(function()
-            local img=AssetService:CreateEditableImage({Size=graphPixelSize})
-            graphImage.ImageContent=Content.fromObject(img); return img
-        end)
-        if ok and ed then fpsEditableImage=ed; editableImageReady=true else ensureFallback() end
-    end
-    local function clearEG()
-        if not editableImageReady or not fpsEditableImage then return false end
-        local ok=pcall(function() fpsEditableImage:DrawRectangle(Vector2.zero,graphPixelSize,Color3.new(0,0,0),1,Enum.ImageCombineType.Overwrite) end)
-        if not ok then editableImageReady=false; ensureFallback() end; return ok
-    end
-    local function drawEGL(a,b)
-        if not editableImageReady or not fpsEditableImage then return false end
-        if supportsAA then
-            local ok=pcall(function() fpsEditableImage:DrawLine(a,b,C.White,0,Enum.ImageCombineType.Overwrite,Enum.AntiAliasing.Enabled) end)
-            if ok then return true end; supportsAA=false
-        end
-        local ok=pcall(function() fpsEditableImage:DrawLine(a,b,C.White,0,Enum.ImageCombineType.Overwrite) end)
-        if not ok then editableImageReady=false; ensureFallback() end; return ok
-    end
-    local statsStrip=make("Frame",{Position=UDim2.fromOffset(14,237),Size=UDim2.new(1,-28,0,43),BackgroundColor3=C.Element,ZIndex=150,Parent=performancePanel})
-    corner(statsStrip,10);stroke(statsStrip,C.Border)
-    local statValueLabels={}
-    for i,sn in ipairs({"AVG","LOW","HIGH"}) do
-        local sc=make("Frame",{Position=UDim2.new((i-1)/3,0,0,0),Size=UDim2.new(1/3,0,1,0),BackgroundTransparency=1,ZIndex=151,Parent=statsStrip})
-        make("TextLabel",{Text=sn,Font=Enum.Font.GothamBold,TextSize=8,TextColor3=C.TextDim,TextXAlignment=Enum.TextXAlignment.Center,BackgroundTransparency=1,Position=UDim2.fromOffset(0,5),Size=UDim2.new(1,0,0,10),ZIndex=152,Parent=sc})
-        statValueLabels[i]=make("TextLabel",{Text="--",Font=Enum.Font.GothamMedium,TextSize=10,TextColor3=C.White,TextXAlignment=Enum.TextXAlignment.Center,BackgroundTransparency=1,Position=UDim2.fromOffset(0,19),Size=UDim2.new(1,0,0,15),ZIndex=152,Parent=sc})
-    end
-    local function redrawFpsGraph()
-        local sc=#fpsSamples; local ps=graphPlot.AbsoluteSize
-        if sc<2 or ps.X<=1 or ps.Y<=1 then
-            if editableImageReady then clearEG() end
-            for _,s in ipairs(graphSegments) do s.Visible=false end; return
-        end
-        local gm=60; for _,v in ipairs(fpsSamples) do gm=math.max(gm,v) end
-        gm=math.max(30,math.ceil(gm/30)*30); local den=math.max(sc-1,1)
-        if editableImageReady and clearEG() then
-            local W=graphPixelSize.X; local H=graphPixelSize.Y
-            local uW=math.max(1,W-2); local uH=math.max(1,H-6)
-            for i=1,sc-1 do
-                local pA=Vector2.new(1+((i-1)/den)*uW, 3+(1-math.clamp(fpsSamples[i]/gm,0,1))*uH)
-                local pB=Vector2.new(1+(i/den)*uW,     3+(1-math.clamp(fpsSamples[i+1]/gm,0,1))*uH)
-                if not drawEGL(pA,pB) then break end
-            end
-            if editableImageReady then return end
-        end
-        local uH=math.max(1,ps.Y-8)
-        for i,seg in ipairs(graphSegments) do
-            if i<sc then
-                local x1=((i-1)/den)*ps.X; local x2=(i/den)*ps.X
-                local y1=4+(1-math.clamp(fpsSamples[i]/gm,0,1))*uH
-                local y2=4+(1-math.clamp(fpsSamples[i+1]/gm,0,1))*uH
-                local dx=x2-x1; local dy=y2-y1; local len=math.sqrt(dx*dx+dy*dy)
-                seg.Position=UDim2.fromOffset(x1,y1); seg.Size=UDim2.fromOffset(len+2,1)
-                seg.Rotation=math.deg(math.atan2(dy,dx)); seg.Visible=true
-            else seg.Visible=false end
-        end
-    end
-    local function pushFpsSample(fps)
-        fps=math.max(0,fps); table.insert(fpsSamples,fps)
-        if #fpsSamples>maxFpsSamples then table.remove(fpsSamples,1) end
-        local tot=0; local lo=math.huge; local hi=0
-        for _,v in ipairs(fpsSamples) do tot=tot+v; lo=math.min(lo,v); hi=math.max(hi,v) end
-        local avg=#fpsSamples>0 and tot/#fpsSamples or 0
-        local ft=fps>0 and (1000/fps) or 0
-        currentFpsLabel.Text=tostring(math.floor(fps+0.5))
-        frameTimeLabel.Text=string.format("%.1f ms",ft)
-        statValueLabels[1].Text=tostring(math.floor(avg+0.5))
-        statValueLabels[2].Text=tostring(math.floor(lo+0.5))
-        statValueLabels[3].Text=tostring(math.floor(hi+0.5))
-        redrawFpsGraph()
-    end
-    toggleMusic, closeMusic = buildMusicPlayer({
-        screenGui = screenGui, profileWidth = profileWidth, bottomMargin = bottomMargin,
-        panelGap = panelGap, toggleBtn = musicToggleBtn, toggleIcon = musicToggleIcon,
-        conns = musicConns, opts = opts,
-    })
-
-    -- ── ADMIN PANEL (only built for users in ADMIN_USER_IDS) ──────────────
-    -- Slides in from the bottom-left whenever the profile panel opens.
-    -- Lists every active client reported by the presence server, with a
-    -- Disconnect button that queues that user for a server-side kick.
-    local adminPanel             -- nil for non-admin users
-    local adminListener          -- TagSystem listener, cleaned up on destroy
-    local setAdminVisible        -- forward declare; called by setProfileVisible
-    local adminEnabled = isAdminUser(localPlayer)
-
-    if adminEnabled then
-        local adminWidth        = math.max(280, tonumber(opts.AdminPanelWidth) or 332)
-        local adminHeight       = math.max(280, tonumber(opts.AdminPanelHeight) or 416)
-        local adminOpenPos      = UDim2.new(0, 18, 1, -bottomMargin)
-        local adminClosedPos    = UDim2.new(0, -(adminWidth + 28), 1, -bottomMargin)
-
-        adminPanel = make("CanvasGroup", {
-            Name = "AdminPanel", AnchorPoint = Vector2.new(0, 1),
-            Position = adminClosedPos, Size = UDim2.fromOffset(adminWidth, adminHeight),
-            BackgroundColor3 = C.CardBg, GroupTransparency = 1,
-            ClipsDescendants = true, ZIndex = 150, Parent = screenGui,
-        })
-        corner(adminPanel, 14)
-
-        -- Header
-        local adminHeader = make("Frame", { Size = UDim2.new(1, 0, 0, 65), BackgroundTransparency = 1, ZIndex = 151, Parent = adminPanel })
-        make("TextLabel", {
-            Text = "ADMIN PANEL", Font = Enum.Font.GothamBold, TextSize = 13,
-            TextColor3 = C.White, TextXAlignment = Enum.TextXAlignment.Left,
-            BackgroundTransparency = 1, Position = UDim2.fromOffset(18, 13),
-            Size = UDim2.new(1, -100, 0, 18), ZIndex = 152, Parent = adminHeader,
-        })
-        make("TextLabel", {
-            Text = "Active client management", Font = Enum.Font.Gotham, TextSize = 10,
-            TextColor3 = C.TextDim, TextXAlignment = Enum.TextXAlignment.Left,
-            BackgroundTransparency = 1, Position = UDim2.fromOffset(18, 34),
-            Size = UDim2.new(1, -100, 0, 15), ZIndex = 152, Parent = adminHeader,
-        })
-        make("Frame", {
-            Position = UDim2.new(0, 18, 1, -1), Size = UDim2.new(1, -36, 0, 1),
-            BackgroundColor3 = C.Border, ZIndex = 151, Parent = adminHeader,
-        })
-
-        -- LIVE badge (top-right, mirrors the performance panel style)
-        local liveBadge = make("Frame", {
-            AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -16, 0, 14),
-            Size = UDim2.fromOffset(64, 20), BackgroundColor3 = C.BadgeIdle,
-            ZIndex = 152, Parent = adminHeader,
-        })
-        corner(liveBadge, 6)
-        local liveDot = make("Frame", {
-            AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 9, 0.5, 0),
-            Size = UDim2.fromOffset(5, 5), BackgroundColor3 = NOTIFICATION_STYLES.success.Color,
-            ZIndex = 153, Parent = liveBadge,
-        })
-        circle(liveDot)
-        make("TextLabel", {
-            Text = "LIVE", Font = Enum.Font.GothamBold, TextSize = 8,
-            TextColor3 = C.TextGray, TextXAlignment = Enum.TextXAlignment.Left,
-            BackgroundTransparency = 1, Position = UDim2.fromOffset(20, 0),
-            Size = UDim2.new(1, -24, 1, 0), ZIndex = 153, Parent = liveBadge,
-        })
-
-        -- Summary card: count on the left, admin UID on the right
-        local summaryCard = make("Frame", {
-            Position = UDim2.fromOffset(16, 75), Size = UDim2.new(1, -32, 0, 56),
-            BackgroundColor3 = C.Element, ZIndex = 151, Parent = adminPanel,
-        })
-        corner(summaryCard, 11); stroke(summaryCard, C.Border)
-        make("TextLabel", {
-            Text = "ACTIVE CLIENTS", Font = Enum.Font.GothamBold, TextSize = 8,
-            TextColor3 = C.TextDim, TextXAlignment = Enum.TextXAlignment.Left,
-            BackgroundTransparency = 1, Position = UDim2.fromOffset(12, 8),
-            Size = UDim2.new(0.5, -12, 0, 11), ZIndex = 152, Parent = summaryCard,
-        })
-        local activeCountLabel = make("TextLabel", {
-            Text = "0", Font = Enum.Font.GothamBold, TextSize = 23,
-            TextColor3 = C.White, TextXAlignment = Enum.TextXAlignment.Left,
-            BackgroundTransparency = 1, Position = UDim2.fromOffset(12, 21),
-            Size = UDim2.new(0.5, -12, 0, 28), ZIndex = 152, Parent = summaryCard,
-        })
-        make("TextLabel", {
-            Text = "ADMIN UID", Font = Enum.Font.GothamBold, TextSize = 8,
-            TextColor3 = C.TextDim, TextXAlignment = Enum.TextXAlignment.Right,
-            BackgroundTransparency = 1, Position = UDim2.new(0.5, 0, 0, 8),
-            Size = UDim2.new(0.5, -12, 0, 11), ZIndex = 152, Parent = summaryCard,
-        })
-        make("TextLabel", {
-            Text = localPlayer and tostring(localPlayer.UserId) or "N/A",
-            Font = Enum.Font.GothamMedium, TextSize = 12, TextColor3 = C.White,
-            TextXAlignment = Enum.TextXAlignment.Right, BackgroundTransparency = 1,
-            Position = UDim2.new(0.5, 0, 0, 26),
-            Size = UDim2.new(0.5, -12, 0, 18), ZIndex = 152, Parent = summaryCard,
-        })
-
-        -- List header + refresh button
-        make("TextLabel", {
-            Text = "CLIENT LIST", Font = Enum.Font.GothamBold, TextSize = 10,
-            TextColor3 = C.TextDim, TextXAlignment = Enum.TextXAlignment.Left,
-            BackgroundTransparency = 1, Position = UDim2.fromOffset(18, 142),
-            Size = UDim2.fromOffset(140, 14), ZIndex = 151, Parent = adminPanel,
-        })
-        local refreshAdminBtn = make("TextButton", {
-            Text = "", AutoButtonColor = false, AnchorPoint = Vector2.new(1, 0.5),
-            Position = UDim2.new(1, -16, 0, 149), Size = UDim2.fromOffset(22, 22),
-            BackgroundColor3 = C.Element, ZIndex = 151, Parent = adminPanel,
-        })
-        corner(refreshAdminBtn, 7); stroke(refreshAdminBtn, C.Border)
-        local refreshAdminIcon = make("ImageLabel", {
-            Image = ICONS.refresh, ImageColor3 = C.TextGray, BackgroundTransparency = 1,
-            AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
-            Size = UDim2.fromOffset(13, 13), ZIndex = 152, Parent = refreshAdminBtn,
-        })
-        refreshAdminBtn.MouseEnter:Connect(function()
-            tween(refreshAdminBtn, { BackgroundColor3 = C.ElementHover })
-            tween(refreshAdminIcon, { ImageColor3 = C.White })
-        end)
-        refreshAdminBtn.MouseLeave:Connect(function()
-            tween(refreshAdminBtn, { BackgroundColor3 = C.Element })
-            tween(refreshAdminIcon, { ImageColor3 = C.TextGray })
-        end)
-        table.insert(noDrag, refreshAdminBtn)
-
-        -- Scrolling list container + empty-state label (sibling so the
-        -- UIListLayout doesn't move it around when the list is empty).
-        local listFrame = make("ScrollingFrame", {
-            Position = UDim2.fromOffset(16, 168),
-            Size = UDim2.new(1, -32, 1, -184),
-            BackgroundColor3 = C.Element, BorderSizePixel = 0,
-            ScrollBarThickness = 3, ScrollBarImageColor3 = C.Border,
-            CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
-            ScrollingDirection = Enum.ScrollingDirection.Y,
-            ZIndex = 151, Parent = adminPanel,
-        })
-        corner(listFrame, 11); stroke(listFrame, C.Border); pad(listFrame, 6, 6, 6, 6)
-        make("UIListLayout", { Padding = UDim.new(0, 5), SortOrder = Enum.SortOrder.LayoutOrder, Parent = listFrame })
-        table.insert(noDrag, listFrame)
-
-        local emptyLabel = make("TextLabel", {
-            Text = "No active clients", Font = Enum.Font.GothamMedium, TextSize = 11,
-            TextColor3 = C.TextDim, TextXAlignment = Enum.TextXAlignment.Center,
-            BackgroundTransparency = 1,
-            AnchorPoint = Vector2.new(0.5, 0.5),
-            Position = UDim2.new(0.5, 0, 0, 168 + ((adminHeight - 184) / 2)),
-            Size = UDim2.fromOffset(adminWidth - 64, 22),
-            ZIndex = 152, Parent = adminPanel,
-        })
-
-        local adminRows = {}  -- userId -> row Frame
-
-        local function buildRow(info, order)
-            local userId = info.userId
-            local isSelf = (localPlayer and userId == localPlayer.UserId) or false
-            local displayName = (info.displayName ~= nil and info.displayName ~= "")
-                and info.displayName or ("User " .. tostring(userId))
-            local handle = (info.name ~= nil and info.name ~= "") and ("@" .. info.name) or "@unknown"
-
-            local row = make("Frame", {
-                Size = UDim2.new(1, 0, 0, 50), BackgroundColor3 = C.WindowBg,
-                LayoutOrder = order, ZIndex = 152, Parent = listFrame,
-            })
-            corner(row, 9); stroke(row, C.Border)
-
-            -- Avatar
-            local avH = make("Frame", {
-                Position = UDim2.fromOffset(7, 7), Size = UDim2.fromOffset(36, 36),
-                BackgroundColor3 = C.Element, ZIndex = 153, Parent = row,
-            })
-            corner(avH, 8)
-            local avImg = make("ImageLabel", {
-                Image = "rbxthumb://type=AvatarHeadShot&id=" .. tostring(userId) .. "&w=150&h=150",
-                BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1),
-                ScaleType = Enum.ScaleType.Crop, ZIndex = 154, Parent = avH,
-            })
-            corner(avImg, 8)
-            if isSelf then
-                local ring = stroke(avH, C.Accent); ring.Transparency = 0.3
-            end
-
-            -- Reserve space on the right for the action (84px button or 60px badge)
-            local actionW = isSelf and 60 or 84
-            local textRight = actionW + 18
-
-            make("TextLabel", {
-                Text = isSelf and (displayName .. "  (you)") or displayName,
-                Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = C.White,
-                TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
-                BackgroundTransparency = 1, Position = UDim2.fromOffset(51, 6),
-                Size = UDim2.new(1, -(51 + textRight), 0, 14),
-                ZIndex = 153, Parent = row,
-            })
-            make("TextLabel", {
-                Text = handle, Font = Enum.Font.Gotham, TextSize = 10,
-                TextColor3 = C.TextDim, TextXAlignment = Enum.TextXAlignment.Left,
-                TextTruncate = Enum.TextTruncate.AtEnd, BackgroundTransparency = 1,
-                Position = UDim2.fromOffset(51, 21),
-                Size = UDim2.new(1, -(51 + textRight), 0, 12),
-                ZIndex = 153, Parent = row,
-            })
-            make("TextLabel", {
-                Text = "ID " .. tostring(userId),
-                Font = Enum.Font.GothamMedium, TextSize = 9,
-                TextColor3 = C.TextDim, TextXAlignment = Enum.TextXAlignment.Left,
-                BackgroundTransparency = 1, Position = UDim2.fromOffset(51, 34),
-                Size = UDim2.new(1, -(51 + textRight), 0, 11),
-                ZIndex = 153, Parent = row,
-            })
-
-            if isSelf then
-                local selfBadge = make("Frame", {
-                    AnchorPoint = Vector2.new(1, 0.5),
-                    Position = UDim2.new(1, -8, 0.5, 0),
-                    Size = UDim2.fromOffset(54, 22),
-                    BackgroundColor3 = C.Badge, ZIndex = 153, Parent = row,
-                })
-                corner(selfBadge, 6)
-                make("TextLabel", {
-                    Text = "YOU", Font = Enum.Font.GothamBold, TextSize = 9,
-                    TextColor3 = C.Accent, TextXAlignment = Enum.TextXAlignment.Center,
-                    BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1),
-                    ZIndex = 154, Parent = selfBadge,
-                })
-            else
-                local CLOSE_RED    = Color3.fromRGB(190, 60, 60)
-                local CLOSE_RED_HI = Color3.fromRGB(212, 80, 80)
-                local dcBtn = make("TextButton", {
-                    Text = "DISCONNECT", Font = Enum.Font.GothamBold, TextSize = 10,
-                    TextColor3 = Color3.fromRGB(255, 255, 255), AutoButtonColor = false,
-                    AnchorPoint = Vector2.new(1, 0.5),
-                    Position = UDim2.new(1, -8, 0.5, 0),
-                    Size = UDim2.fromOffset(78, 24),
-                    BackgroundColor3 = CLOSE_RED, ZIndex = 153, Parent = row,
-                })
-                corner(dcBtn, 6)
-                dcBtn.MouseEnter:Connect(function() tween(dcBtn, { BackgroundColor3 = CLOSE_RED_HI }) end)
-                dcBtn.MouseLeave:Connect(function() tween(dcBtn, { BackgroundColor3 = CLOSE_RED }) end)
-                dcBtn.MouseButton1Click:Connect(function()
-                    if dcBtn:GetAttribute("Busy") then return end
-                    dcBtn:SetAttribute("Busy", true)
-                    dcBtn.Text = "..."
-                    task.spawn(function()
-                        local ok, err = Library:AdminDisconnect(userId)
-                        if ok then
-                            if windowRef and windowRef.Notify then
-                                windowRef:Notify({
-                                    Title = "Admin",
-                                    Content = "Disconnect queued: " .. displayName,
-                                    Type = "warning", Duration = 4,
-                                })
-                            end
-                            -- Optimistically drop the row; the next poll
-                            -- will reconcile anyway.
-                            if row and row.Parent then row:Destroy() end
-                            adminRows[userId] = nil
-                        else
-                            dcBtn.Text = "DISCONNECT"
-                            dcBtn:SetAttribute("Busy", nil)
-                            if windowRef and windowRef.Notify then
-                                windowRef:Notify({
-                                    Title = "Admin",
-                                    Content = "Disconnect failed: " .. tostring(err),
-                                    Type = "error", Duration = 5,
-                                })
-                            end
-                        end
-                    end)
-                end)
-                table.insert(noDrag, dcBtn)
-            end
-            return row
-        end
-
-        local function refreshAdminList(userInfos)
-            -- Clear existing rows
-            for uid, r in pairs(adminRows) do
-                if r and r.Parent then r:Destroy() end
-            end
-            table.clear(adminRows)
-
-            userInfos = userInfos or TagSystem._userInfo or {}
-            -- Ensure the local admin always shows up, even if the latest
-            -- /users response hasn't echoed back our own /register yet.
-            local merged = {}
-            for id, info in pairs(userInfos) do merged[id] = info end
-            if localPlayer and not merged[localPlayer.UserId] then
-                merged[localPlayer.UserId] = {
-                    userId      = localPlayer.UserId,
-                    displayName = localPlayer.DisplayName,
-                    name        = localPlayer.Name,
-                }
-            end
-
-            local sorted = {}
-            for _, info in pairs(merged) do table.insert(sorted, info) end
-            table.sort(sorted, function(a, b)
-                -- Pin "you" to the top, then alphabetical by display name
-                local aSelf = localPlayer and a.userId == localPlayer.UserId
-                local bSelf = localPlayer and b.userId == localPlayer.UserId
-                if aSelf ~= bSelf then return aSelf end
-                local an = string.lower(tostring(a.displayName or ""))
-                local bn = string.lower(tostring(b.displayName or ""))
-                if an ~= bn then return an < bn end
-                return a.userId < b.userId
-            end)
-
-            for i, info in ipairs(sorted) do
-                local row = buildRow(info, i)
-                adminRows[info.userId] = row
-            end
-            activeCountLabel.Text = tostring(#sorted)
-            emptyLabel.Visible = (#sorted == 0)
-        end
-
-        refreshAdminBtn.MouseButton1Click:Connect(function()
-            tween(refreshAdminIcon, { Rotation = refreshAdminIcon.Rotation + 360 })
-            task.spawn(function()
-                tagFetchAndUpdate()
-                pcall(refreshAdminList, TagSystem._userInfo)
-            end)
-        end)
-
-        -- Subscribe to live updates from the tag system poll loop.
-        adminListener = TagSystem:OnUsersUpdated(function(userInfos)
-            if not adminPanel or not adminPanel.Parent then return end
-            task.spawn(function() pcall(refreshAdminList, userInfos) end)
-        end)
-
-        -- Initial render with whatever data we already have.
-        refreshAdminList(TagSystem._userInfo)
-
-        -- Trigger an immediate fetch in the background so the list populates
-        -- without waiting for the next 5s poll tick.
-        task.spawn(function() pcall(tagFetchAndUpdate) end)
-
-        function setAdminVisible(open, instant)
-            local pos = open and adminOpenPos or adminClosedPos
-            local tr  = open and 0 or 1
-            if instant then
-                adminPanel.Position = pos
-                adminPanel.GroupTransparency = tr
-            else
-                TweenService:Create(adminPanel, PROFILE_TWEEN, { Position = pos, GroupTransparency = tr }):Play()
-            end
-        end
-    end
-
-    local function setProfileVisible(visible,instant)
-        profileOpen=visible==true
-        if not profileOpen and closeMusic then closeMusic(instant) end
-        local tp=profileOpen and profileOpenPos or profileClosedPos
-        local ep=profileOpen and performanceOpenPos or performanceClosedPos
-        local tr=profileOpen and 0 or 1
-        if instant then
-            profilePanel.Position=tp; profilePanel.GroupTransparency=tr
-            performancePanel.Position=ep; performancePanel.GroupTransparency=tr
-        else
-            TweenService:Create(profilePanel,PROFILE_TWEEN,{Position=tp,GroupTransparency=tr}):Play()
-            TweenService:Create(performancePanel,PROFILE_TWEEN,{Position=ep,GroupTransparency=tr}):Play()
-        end
-        if setAdminVisible then setAdminVisible(profileOpen, instant) end
-        if windowRef then windowRef._profileOpen=profileOpen end; return profileOpen
-    end
-    if localPlayer then
-        task.spawn(function()
-            local ok,img=pcall(function() return Players:GetUserThumbnailAsync(localPlayer.UserId,Enum.ThumbnailType.HeadShot,Enum.ThumbnailSize.Size420x420) end)
-            if ok and avatar and avatar.Parent then avatar.Image=img end
-        end)
-    end
-    task.spawn(function()
-        while screenGui and screenGui.Parent do
-            local txt="N/A"
-            local ok,val=pcall(function() return Stats.Network.ServerStatsItem["Data Ping"]:GetValue() end)
-            if ok and type(val)=="number" then txt=tostring(math.floor(val+0.5)).." ms" end
-            if pingLabel and pingLabel.Parent then pingLabel.Text=txt end; task.wait(1)
-        end
-    end)
-
-    windowRef = setmetatable({
-        ScreenGui=screenGui, Main=main, Container=container, Logo=brandLogo, Watermark=watermark,
-        _logoAsset=logoAsset, _hotbar=hotbar, _hotbarInner=hotbarInner, _content=content,
-        _notificationHolder=notificationHolder, _notificationOrder=0,
-        _profilePanel=profilePanel, _performancePanel=performancePanel,
-        _fpsEditableImage=fpsEditableImage, _profileKey=profileKey,
-        _profileOpen=profileOpen, _setProfileVisible=setProfileVisible,
-        _connections={}, _noDrag=noDrag, _tabs={}, _activeTab=nil,
-        _containerScale=containerScale, _uiVisible=true, _toggleKey=toggleKey,
-        _destroyed=false,
-    }, Window)
-    windowRef.Notify=function(s,m) return Window.Notify(windowRef,s==windowRef and m or s) end
-    windowRef.Notification=windowRef.Notify
-    if dragConn then table.insert(windowRef._connections, dragConn) end
-    for _,c in ipairs(musicConns) do table.insert(windowRef._connections, c) end
-
-    -- Clean up the admin panel's TagSystem listener on Window:Destroy()
-    if adminListener then
-        table.insert(windowRef._connections, {
-            Disconnect = function() TagSystem:RemoveListener(adminListener) end,
-        })
-    end
-
-    -- ── PERSISTENCE GUARD ─────────────────────────────────────────────────
-    -- Some games / anti-cheats strip GUIs (from CoreGui or PlayerGui) when the
-    -- character respawns, which made the whole window — and the minimized
-    -- burger button in the top corner — vanish on death. Re-parent the window
-    -- back to a safe host whenever it gets detached, so it never disappears.
-    -- The burger button lives under screenGui too, so it returns with it.
-    local function resolveHost()
-        local host
-        if typeof(opts.Parent) == "Instance" then
-            host = opts.Parent
-        else
-            pcall(function() host = (gethui and gethui()) or game:GetService("CoreGui") end)
-        end
-        if not host then host = Players.LocalPlayer:WaitForChild("PlayerGui") end
-        return host
-    end
-    local guardConn
-    guardConn = screenGui.AncestryChanged:Connect(function(_, parent)
-        -- parent == nil means it was detached from the DataModel (e.g. on death),
-        -- not an intentional Destroy (which sets windowRef._destroyed).
-        if parent ~= nil then return end
-        if windowRef and windowRef._destroyed then return end
-        task.defer(function()
-            if windowRef and windowRef._destroyed then return end
-            if screenGui.Parent ~= nil then return end
-            pcall(function() screenGui.Parent = resolveHost() end)
-        end)
-    end)
-    table.insert(windowRef._connections, guardConn)
-
-    local ffc=0; local fe=0
-    local fpsConn=RunService.RenderStepped:Connect(function(dt)
-        if not screenGui or not screenGui.Parent then return end
-        ffc=ffc+1; fe=fe+dt
-        if fe>=0.25 then pushFpsSample(ffc/fe); ffc=0; fe=0 end
-    end)
-    table.insert(windowRef._connections,fpsConn)
-    local pkConn=UserInputService.InputBegan:Connect(function(input,gp)
-        if not loadingComplete or gp or UserInputService:GetFocusedTextBox() then return end
-        if input.KeyCode==profileKey and Library._windowObjects[#Library._windowObjects]==windowRef then
-            windowRef:ToggleProfile()
-        end
-    end)
-    table.insert(windowRef._connections,pkConn)
-    if toggleKey then
-        local tkConn=UserInputService.InputBegan:Connect(function(input,gp)
-            if not loadingComplete or gp or UserInputService:GetFocusedTextBox() then return end
-            if input.KeyCode==toggleKey then windowRef:ToggleUI() end
-        end)
-        table.insert(windowRef._connections,tkConn)
-    end
-
-    -- ── MOBILE / RESPONSIVE SCALING ──────────────────────────────────────
-    -- The side panels live directly under the ScreenGui (not the container),
-    -- so each gets its own UIScale that we drive together with the container.
-    local function ensureScale(inst)
-        if not inst then return nil end
-        local us = inst:FindFirstChildOfClass("UIScale")
-        if not us then us = make("UIScale", { Scale = 1, Parent = inst }) end
-        return us
-    end
-    local musicPanel = screenGui:FindFirstChild("MusicPlayer")
-    local scaleList = {}
-    for _, inst in ipairs({ profilePanel, performancePanel, musicPanel, burgerButton, adminPanel }) do
-        local us = ensureScale(inst); if us then table.insert(scaleList, us) end
-    end
-    local userScale = tonumber(opts.Scale) or 1
-    local function applyResponsiveScale()
-        local cam = Workspace.CurrentCamera
-        local vp = (cam and cam.ViewportSize) or Vector2.new(1280, 720)
-        local s = 1
-        if isMobile then
-            local sx = (vp.X * 0.96) / math.max(1, containerW)
-            local sy = (vp.Y * 0.90) / math.max(1, containerH)
-            s = math.clamp(math.min(sx, sy, 1), 0.4, 1)
-        end
-        s = s * userScale
-        containerScale.Scale = s
-        for _, us in ipairs(scaleList) do us.Scale = s end
-    end
-    applyResponsiveScale()
-    do
-        local cam = Workspace.CurrentCamera
-        if cam then
-            table.insert(windowRef._connections, cam:GetPropertyChangedSignal("ViewportSize"):Connect(applyResponsiveScale))
-        end
-    end
-
-    -- ── UI VISIBILITY TOGGLE (keyboard-free; drives the floating button) ──
-    local uiHidden = false
-    local function setUIVisible(v)
-        v = (v ~= false)
-        uiHidden = not v
-        container.Visible = v
-        hotbar.Visible = v and not minimized
-        if burgerButton then burgerButton.Visible = v and minimized end
-        windowRef._uiVisible = v
-        return v
-    end
-    windowRef._setUIVisible = setUIVisible
-
-    -- On mobile there is no toggle key, so add a draggable floating button.
-    if isMobile then
-        local fab = make("TextButton", {
-            Name = "OxidelibMobileToggle", Text = "", AutoButtonColor = false,
-            AnchorPoint = Vector2.new(0, 0), Position = UDim2.fromOffset(14, 14),
-            Size = UDim2.fromOffset(46, 46), BackgroundColor3 = C.CardBg,
-            ZIndex = 60, Parent = screenGui,
-        })
-        corner(fab, 12); stroke(fab, C.Border)
-        make("ImageLabel", { Image = logoAsset, BackgroundTransparency = 1, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(26, 26), ScaleType = Enum.ScaleType.Fit, ZIndex = 61, Parent = fab })
-        local fabDrag = makeDraggable(fab, {})
-        if fabDrag then table.insert(windowRef._connections, fabDrag) end
-        -- distinguish a tap (toggle) from a drag (move) using a movement threshold
-        local downPos
-        fab.InputBegan:Connect(function(input)
-            if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-                downPos = input.Position
-            end
-        end)
-        fab.InputEnded:Connect(function(input)
-            if (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1) and downPos then
-                local moved = (input.Position - downPos).Magnitude
-                downPos = nil
-                if moved < 8 then setUIVisible(uiHidden) end
-            end
-        end)
-    end
-
-    table.insert(Library._windowObjects,windowRef)
-    if opts.Visible==false then screenGui.Enabled=false end
-
-    if loadingEnabled and loadingLayer then
-        task.defer(function()
-            while not loadingMotionComplete and screenGui.Parent do RunService.Heartbeat:Wait() end
-            if not screenGui.Parent or not loadingLayer.Parent then return end
-            main.Visible=true; hotbar.Visible=true
-            TweenService:Create(mainRevealScale,TweenInfo.new(0.46,Enum.EasingStyle.Quart,Enum.EasingDirection.Out),{Scale=1}):Play()
-            local fo=TweenService:Create(loadingLayer,TweenInfo.new(0.48,Enum.EasingStyle.Quart,Enum.EasingDirection.InOut),{GroupTransparency=1})
-            local ce=loadingContent and TweenService:Create(loadingContent,TweenInfo.new(0.46,Enum.EasingStyle.Quart,Enum.EasingDirection.In),{Position=UDim2.new(0.5,0,0.5,-18),GroupTransparency=1})
-            local le=loadingLogoScale and TweenService:Create(loadingLogoScale,TweenInfo.new(0.42,Enum.EasingStyle.Quart,Enum.EasingDirection.In),{Scale=0.84})
-            local te=loadingTitleScale and TweenService:Create(loadingTitleScale,TweenInfo.new(0.42,Enum.EasingStyle.Quart,Enum.EasingDirection.In),{Scale=0.95})
-            local pe
-            if loadingProgressFill and loadingProgressFill.Parent then
-                loadingProgressFill.AnchorPoint=Vector2.new(0.5,0.5); loadingProgressFill.Position=UDim2.fromScale(0.5,0.5)
-                pe=TweenService:Create(loadingProgressFill,TweenInfo.new(0.3,Enum.EasingStyle.Quart,Enum.EasingDirection.In),{Size=UDim2.new(0,0,1,0)})
-            end
-            fo:Play(); if ce then ce:Play() end; if le then le:Play() end; if te then te:Play() end; if pe then pe:Play() end
-            if loadingBlur then TweenService:Create(loadingBlur,TweenInfo.new(0.48,Enum.EasingStyle.Quart,Enum.EasingDirection.InOut),{Size=0}):Play() end
-            if loadingSound then TweenService:Create(loadingSound,TweenInfo.new(0.5),{Volume=0}):Play() end
-            fo.Completed:Wait()
-            if loadingLayer and loadingLayer.Parent then loadingLayer:Destroy() end
-            pcall(function() if loadingBlur then loadingBlur:Destroy() end end)
-            pcall(function() if loadingSound then loadingSound:Stop(); loadingSound:Destroy() end end)
-            if not screenGui.Parent then return end; loadingComplete=true
-        end)
-    end
-
-    return windowRef
-end
-
--- ════════════════════════════════════════════════════════════════════════════
--- WINDOW METHODS
--- ════════════════════════════════════════════════════════════════════════════
-function Window:SetVisible(v) self.ScreenGui.Enabled = v==true end
-function Window:Toggle() self.ScreenGui.Enabled = not self.ScreenGui.Enabled; return self.ScreenGui.Enabled end
-function Window:SetUIVisible(v)
-    if self._setUIVisible then return self._setUIVisible(v==true) end
-    self.ScreenGui.Enabled = v==true; return v==true
-end
-function Window:ToggleUI() return self:SetUIVisible(not self._uiVisible) end
-function Window:SetProfileVisible(v)
-    if not self._setProfileVisible then return false end
-    self._profileOpen=self._setProfileVisible(v==true); return self._profileOpen
-end
-function Window:ToggleProfile() return self:SetProfileVisible(not self._profileOpen) end
-function Window:SetLogo(id)
-    self._logoAsset=normalizeAssetId(id)
-    if self.Logo then self.Logo.Image=self._logoAsset end
-    if self.Watermark then self.Watermark.Image=self._logoAsset end
-    return self._logoAsset
-end
-
-function Window:Notify(opts)
-    if type(opts)=="string" then opts={Content=opts} end; opts=opts or {}
-    local holder=self._notificationHolder; if not holder or not holder.Parent then return nil end
-    local style=getNotificationStyle(opts.Type)
-    local dur=tonumber(opts.Duration); if dur==nil then dur=4 end; dur=math.max(dur,0)
-    self._notificationOrder=self._notificationOrder+1
-    local title=tostring(opts.Title or style.Name)
-    local body =tostring(opts.Content or opts.Description or opts.Message or "Notification")
-    local slot=make("Frame",{Name="NotificationSlot",Size=UDim2.new(1,0,0,62),BackgroundTransparency=1,LayoutOrder=self._notificationOrder,ZIndex=200,Parent=holder})
-    local card=make("CanvasGroup",{Name=style.Name.."Notification",AnchorPoint=Vector2.new(1,0),Position=UDim2.new(1,12,0,0),Size=UDim2.fromScale(1,1),BackgroundColor3=C.White,GroupTransparency=1,ClipsDescendants=true,ZIndex=201,Parent=slot})
-    corner(card,6);stroke(card,C.Border)
-    -- Same look as the brand card: muted blue-to-gray fade (blue at the
-    -- bottom) plus the diagonal blue-white shimmer sweep. The frame must be
-    -- white because a UIGradient multiplies instead of replacing.
-    card:SetAttribute("Theme_BackgroundColor3", nil)
-    local cardGrad=make("UIGradient",{Rotation=90,Parent=card})
-    cardGrad:SetAttribute("ThemeGradient_Top","CardBg")
-    cardGrad:SetAttribute("ThemeGradient_Bottom","Accent")
-    cardGrad:SetAttribute("ThemeGradient_Strength",0.5)
-    refreshVerticalFade(cardGrad)
-    local shimmer=make("Frame",{Name="Shimmer",Size=UDim2.fromScale(1,1),ZIndex=0,BackgroundColor3=Color3.fromRGB(210,225,255),Parent=card})
-    corner(shimmer,6)
-    local shimmerGrad=make("UIGradient",{
-        Rotation=45,
-        Color=ColorSequence.new({
-            ColorSequenceKeypoint.new(0.00, C.Accent),
-            ColorSequenceKeypoint.new(0.42, C.Accent),
-            ColorSequenceKeypoint.new(0.50, Color3.fromRGB(255, 255, 255)),
-            ColorSequenceKeypoint.new(0.58, C.Accent),
-            ColorSequenceKeypoint.new(1.00, C.Accent),
-        }),
-        Transparency=NumberSequence.new({
-            NumberSequenceKeypoint.new(0.00, 1.0),
-            NumberSequenceKeypoint.new(0.38, 1.0),
-            NumberSequenceKeypoint.new(0.50, 0.55),
-            NumberSequenceKeypoint.new(0.62, 1.0),
-            NumberSequenceKeypoint.new(1.00, 1.0),
-        }),
-        Parent=shimmer,
-    })
-    shimmerGrad:SetAttribute("ThemeGradient_Edge","Accent")
-    -- Each notification drives its own shimmer sweep (same cycle as the
-    -- window glow), disconnecting when the card is dismissed.
-    local nGlowT=0
-    local shimmerConn=RunService.RenderStepped:Connect(function(dt)
-        if not card or not card.Parent then if shimmerConn then shimmerConn:Disconnect() end return end
-        nGlowT=(nGlowT+dt*0.35)%1
-        shimmerGrad.Offset=Vector2.new(nGlowT*2-1,0)
-    end)
-    -- Style accent: short colored bar on the left edge
-    local accentBar=make("Frame",{Position=UDim2.fromOffset(0,10),Size=UDim2.fromOffset(3,42),BackgroundColor3=style.Color,ZIndex=202,Parent=card})
-    corner(accentBar,2)
-    -- Style icon chip
-    local iconHolder=make("Frame",{Position=UDim2.fromOffset(14,17),Size=UDim2.fromOffset(28,28),BackgroundColor3=style.Color,BackgroundTransparency=0.88,ZIndex=202,Parent=card})
-    corner(iconHolder,8)
-    make("ImageLabel",{Image=style.Icon or ICONS.alert,ImageColor3=style.Color,BackgroundTransparency=1,AnchorPoint=Vector2.new(0.5,0.5),Position=UDim2.fromScale(0.5,0.5),Size=UDim2.fromOffset(15,15),ScaleType=Enum.ScaleType.Fit,ZIndex=203,Parent=iconHolder})
-    make("TextLabel",{Text=title,Font=Enum.Font.GothamBold,TextSize=12,TextColor3=style.Color,TextXAlignment=Enum.TextXAlignment.Left,TextTruncate=Enum.TextTruncate.AtEnd,BackgroundTransparency=1,Position=UDim2.fromOffset(52,8),Size=UDim2.new(1,-84,0,16),ZIndex=202,Parent=card})
-    make("TextLabel",{Text=body,Font=Enum.Font.Gotham,TextSize=11,TextColor3=C.TextGray,TextXAlignment=Enum.TextXAlignment.Left,TextYAlignment=Enum.TextYAlignment.Top,TextWrapped=true,BackgroundTransparency=1,Position=UDim2.fromOffset(52,27),Size=UDim2.new(1,-64,0,26),ZIndex=202,Parent=card})
-    local xb=make("TextButton",{Text="×",Font=Enum.Font.Gotham,TextSize=14,TextColor3=C.TextDim,AnchorPoint=Vector2.new(1,0),Position=UDim2.new(1,-7,0,5),Size=UDim2.fromOffset(20,20),BackgroundTransparency=1,ZIndex=204,Parent=card})
-    local closed=false; local handle={}
-    local function close(reason)
-        if closed then return end; closed=true
-        TweenService:Create(card,NOTIFICATION_TWEEN,{Position=UDim2.new(1,12,0,0),GroupTransparency=1}):Play()
-        task.delay(0.2,function() if slot and slot.Parent then slot:Destroy() end end)
-        fire(opts.Callback or opts.OnClose,reason or "closed")
-    end
-    function handle:Close() close("manual") end
-    function handle:IsOpen() return not closed end
-    xb.MouseEnter:Connect(function() tween(xb,{TextColor3=C.White}) end)
-    xb.MouseLeave:Connect(function() tween(xb,{TextColor3=C.TextDim}) end)
-    xb.MouseButton1Click:Connect(function() close("manual") end)
-    TweenService:Create(card,NOTIFICATION_TWEEN,{Position=UDim2.new(1,0,0,0),GroupTransparency=0}):Play()
-    if dur>0 then task.delay(dur,function() close("timeout") end) end; return handle
-end
-
-function Window:Destroy()
-    self._destroyed = true
-    for _,c in ipairs(self._connections or {}) do c:Disconnect() end
-    table.clear(self._connections or {})
-    if self._fpsEditableImage then pcall(function() self._fpsEditableImage:Destroy() end); self._fpsEditableImage=nil end
-    local i=table.find(Library._windows,self.ScreenGui); if i then table.remove(Library._windows,i) end
-    local j=table.find(Library._windowObjects,self);     if j then table.remove(Library._windowObjects,j) end
-    if self.ScreenGui then self.ScreenGui:Destroy() end
-end
-
--- ════════════════════════════════════════════════════════════════════════════
--- TAB SYSTEM
--- ════════════════════════════════════════════════════════════════════════════
-function Window:_selectTab(tab)
-    if self._activeTab==tab then return end
-    local prev=self._activeTab; self._activeTab=tab
-    if prev then
-        prev._page.Visible=false
-        tween(prev._hBtn,{BackgroundColor3=C.HotbarBg})
-        tween(prev._hLabel,{TextColor3=C.TextGray})
-        if prev._hDot then tween(prev._hDot,{BackgroundTransparency=1}) end
-        if prev._hIconElement then
-            if prev._hIconElement:IsA("ImageLabel") then tween(prev._hIconElement,{ImageColor3=C.TextGray})
-            elseif prev._hIconElement:IsA("TextLabel") then tween(prev._hIconElement,{TextColor3=C.TextGray}) end
-        end
-    end
-    tab._page.Visible=true
-    tween(tab._hBtn,{BackgroundColor3=C.HotbarActive})
-    tween(tab._hLabel,{TextColor3=C.White})
-    if tab._hDot then tween(tab._hDot,{BackgroundTransparency=0}) end
-    if tab._hIconElement then
-        if tab._hIconElement:IsA("ImageLabel") then tween(tab._hIconElement,{ImageColor3=C.White})
-        elseif tab._hIconElement:IsA("TextLabel") then tween(tab._hIconElement,{TextColor3=C.White}) end
-    end
-end
-
-function Window:AddTab(opts)
-    if type(opts)=="string" then opts={Name=opts} end
-    opts=opts or {}
-    local name=opts.Name or "Tab"
-    local iconInput = opts.Icon
-    local win=self
-
-    local iconType, iconValue = resolveIcon(iconInput)
-    if not iconType then
-        local autoKey = string.lower(name)
-        if ICONS[autoKey] then iconType="image"; iconValue=ICONS[autoKey]
-        else iconType="text"; iconValue=string.upper(string.sub(name,1,1)) end
-    end
-
-    local hBtn=make("TextButton",{
-        Text="", AutomaticSize=Enum.AutomaticSize.X,
-        Size=UDim2.new(0,0,1,0),
-        BackgroundColor3=C.HotbarBg,
-        ZIndex=5, Parent=self._hotbarInner,
-    })
-    hBtn.LayoutOrder=#self._hotbarInner:GetChildren()
-    corner(hBtn,7); pad(hBtn,0,0,12,12)
-    table.insert(win._noDrag,hBtn)
-
-    local hRow=make("Frame",{BackgroundTransparency=1,AutomaticSize=Enum.AutomaticSize.X,Size=UDim2.new(0,0,1,0),ZIndex=5,Parent=hBtn})
-    make("UIListLayout",{FillDirection=Enum.FillDirection.Horizontal,VerticalAlignment=Enum.VerticalAlignment.Center,SortOrder=Enum.SortOrder.LayoutOrder,Padding=UDim.new(0,6),Parent=hRow})
-
-    local iconBadge=make("Frame",{Size=UDim2.fromOffset(20,20),BackgroundTransparency=1,LayoutOrder=1,ZIndex=6,Parent=hRow})
-    local hIconElement = createIconElement(iconBadge, iconType, iconValue, 18, 7)
-
-    local hLabel=make("TextLabel",{
-        Text=name,Font=Enum.Font.GothamMedium,TextSize=12,
-        TextColor3=C.TextGray,BackgroundTransparency=1,
-        AutomaticSize=Enum.AutomaticSize.X,
-        Size=UDim2.new(0,0,1,0),LayoutOrder=2,ZIndex=6,Parent=hRow,
-    })
-
-    local hDot=make("Frame",{
-        AnchorPoint=Vector2.new(0.5,0), Position=UDim2.new(0.5,0,1,4),
-        Size=UDim2.fromOffset(4,4), BackgroundColor3=C.Accent,
-        BackgroundTransparency=1, ZIndex=6, Parent=hBtn,
-    })
-    circle(hDot)
-
-    local page=make("Frame",{Size=UDim2.fromScale(1,1),BackgroundTransparency=1,Visible=false,Parent=self._content})
-    local header=make("Frame",{Size=UDim2.new(1,0,0,88),BackgroundTransparency=1,Parent=page})
-
-    local headerBadge=make("Frame",{Size=UDim2.fromOffset(32,32),Position=UDim2.fromOffset(14,14),BackgroundTransparency=1,Parent=header})
-    local headerIconElement = createIconElement(headerBadge, iconType, iconValue, 26, 3)
-    if headerIconElement:IsA("ImageLabel") then headerIconElement.ImageColor3=C.White
-    elseif headerIconElement:IsA("TextLabel") then headerIconElement.TextColor3=C.White end
-
-    make("TextLabel",{Text=name,Font=Enum.Font.GothamBold,TextSize=14,TextColor3=C.White,TextXAlignment=Enum.TextXAlignment.Left,BackgroundTransparency=1,Position=UDim2.fromOffset(54,17),Size=UDim2.new(1,-70,0,14),Parent=header})
-    make("TextLabel",{Text=opts.Subtitle or "",Font=Enum.Font.Gotham,TextSize=11,TextColor3=C.TextDim,TextXAlignment=Enum.TextXAlignment.Left,BackgroundTransparency=1,Position=UDim2.fromOffset(54,33),Size=UDim2.new(1,-70,0,12),Parent=header})
-    local pillBar=make("Frame",{Position=UDim2.fromOffset(16,54),Size=UDim2.new(1,-32,0,24),BackgroundTransparency=1,ClipsDescendants=true,Parent=header})
-    local pillScrollLeft=make("TextButton",{Text="‹",Font=Enum.Font.GothamBold,TextSize=18,TextColor3=C.TextGray,Size=UDim2.fromOffset(20,24),BackgroundColor3=C.WindowBg,Visible=false,Parent=pillBar})
-    corner(pillScrollLeft,6); table.insert(win._noDrag,pillScrollLeft)
-    local pillScroll=make("ScrollingFrame",{Position=UDim2.fromOffset(24,0),Size=UDim2.new(1,-48,1,0),BackgroundTransparency=1,BorderSizePixel=0,ScrollBarThickness=0,ScrollingDirection=Enum.ScrollingDirection.X,AutomaticCanvasSize=Enum.AutomaticSize.X,CanvasSize=UDim2.new(),ClipsDescendants=true,Parent=pillBar})
-    table.insert(win._noDrag,pillScroll)
-    local pillRow=make("Frame",{AutomaticSize=Enum.AutomaticSize.X,Size=UDim2.new(0,0,1,0),BackgroundTransparency=1,Parent=pillScroll})
-    make("UIListLayout",{FillDirection=Enum.FillDirection.Horizontal,SortOrder=Enum.SortOrder.LayoutOrder,Padding=UDim.new(0,8),Parent=pillRow})
-    local pillScrollRight=make("TextButton",{Text="›",Font=Enum.Font.GothamBold,TextSize=18,TextColor3=C.TextGray,AnchorPoint=Vector2.new(1,0),Position=UDim2.new(1,0,0,0),Size=UDim2.fromOffset(20,24),BackgroundColor3=C.WindowBg,Visible=false,Parent=pillBar})
-    corner(pillScrollRight,6); table.insert(win._noDrag,pillScrollRight)
-    make("Frame",{Position=UDim2.new(0,0,1,-1),Size=UDim2.new(1,0,0,1),BackgroundColor3=C.Border,Parent=header})
-    local pagesHolder=make("Frame",{Position=UDim2.fromOffset(0,88),Size=UDim2.new(1,0,1,-88),BackgroundTransparency=1,Parent=page})
-
-    local tab=setmetatable({
-        _window=win,
-        _hBtn=hBtn,_hLabel=hLabel,_hDot=hDot,_hIconElement=hIconElement,
-        _page=page,_pillBar=pillBar,_pillScroll=pillScroll,_pillRow=pillRow,
-        _pillScrollLeft=pillScrollLeft,_pillScrollRight=pillScrollRight,
-        _pagesHolder=pagesHolder,
-        _subTabs={},_activeSub=nil,
-    },Tab)
-    tab:_setupPillScroll()
-
-    hBtn.MouseButton1Click:Connect(function() win:_selectTab(tab) end)
-    hBtn.MouseEnter:Connect(function()
-        if win._activeTab~=tab then tween(hBtn,{BackgroundColor3=C.HotbarHover}) end
-    end)
-    hBtn.MouseLeave:Connect(function()
-        tween(hBtn,{BackgroundColor3=win._activeTab==tab and C.HotbarActive or C.HotbarBg})
-    end)
-
-    table.insert(self._tabs,tab)
-    if not self._activeTab then self:_selectTab(tab) end
-    return tab
-end
-
--- ════════════════════════════════════════════════════════════════════════════
--- SUBTAB + ELEMENTS
--- ════════════════════════════════════════════════════════════════════════════
-local PILL_SCROLL_STEP = 72
-
-function Tab:_updatePillScroll()
-    local scroll = self._pillScroll
-    if not scroll then return end
-    task.defer(function()
-        if not scroll.Parent then return end
-        local maxX = math.max(0, scroll.AbsoluteCanvasSize.X - scroll.AbsoluteWindowSize.X)
-        local canScroll = maxX > 2
-        if self._pillScrollLeft then
-            self._pillScrollLeft.Visible = canScroll
-            paint(self._pillScrollLeft, "TextColor3", scroll.CanvasPosition.X > 2 and "White" or "TextDim", true)
-        end
-        if self._pillScrollRight then
-            self._pillScrollRight.Visible = canScroll
-            paint(self._pillScrollRight, "TextColor3", scroll.CanvasPosition.X < maxX - 2 and "White" or "TextDim", true)
-        end
-        if not canScroll then
-            scroll.CanvasPosition = Vector2.new(0, 0)
-        end
-    end)
-end
-
-function Tab:_scrollPillBy(delta)
-    local scroll = self._pillScroll
-    if not scroll then return end
-    local maxX = math.max(0, scroll.AbsoluteCanvasSize.X - scroll.AbsoluteWindowSize.X)
-    scroll.CanvasPosition = Vector2.new(math.clamp(scroll.CanvasPosition.X + delta, 0, maxX), 0)
-    self:_updatePillScroll()
-end
-
-function Tab:_scrollPillIntoView(pill)
-    local scroll = self._pillScroll
-    if not scroll or not pill or not pill.Parent then return end
-    task.defer(function()
-        if not pill.Parent or not scroll.Parent then return end
-        local maxX = math.max(0, scroll.AbsoluteCanvasSize.X - scroll.AbsoluteWindowSize.X)
-        local relLeft = pill.AbsolutePosition.X - scroll.AbsolutePosition.X + scroll.CanvasPosition.X
-        local relRight = relLeft + pill.AbsoluteSize.X
-        local viewLeft = scroll.CanvasPosition.X
-        local viewRight = viewLeft + scroll.AbsoluteWindowSize.X
-        local nextX = scroll.CanvasPosition.X
-        if relLeft < viewLeft + 4 then
-            nextX = relLeft - 8
-        elseif relRight > viewRight - 4 then
-            nextX = relRight - scroll.AbsoluteWindowSize.X + 8
-        end
-        scroll.CanvasPosition = Vector2.new(math.clamp(nextX, 0, maxX), 0)
-        self:_updatePillScroll()
-    end)
-end
-
-function Tab:_setupPillScroll()
-    local scroll = self._pillScroll
-    local left = self._pillScrollLeft
-    local right = self._pillScrollRight
-    if not scroll then return end
-
-    if left then
-        left.MouseButton1Click:Connect(function() self:_scrollPillBy(-PILL_SCROLL_STEP) end)
-        left.MouseEnter:Connect(function() tween(left, {BackgroundColor3=C.NavHover}) end)
-        left.MouseLeave:Connect(function() tween(left, {BackgroundColor3=C.WindowBg}) end)
-    end
-    if right then
-        right.MouseButton1Click:Connect(function() self:_scrollPillBy(PILL_SCROLL_STEP) end)
-        right.MouseEnter:Connect(function() tween(right, {BackgroundColor3=C.NavHover}) end)
-        right.MouseLeave:Connect(function() tween(right, {BackgroundColor3=C.WindowBg}) end)
-    end
-
-    scroll:GetPropertyChangedSignal("AbsoluteCanvasSize"):Connect(function() self:_updatePillScroll() end)
-    scroll:GetPropertyChangedSignal("AbsoluteWindowSize"):Connect(function() self:_updatePillScroll() end)
-    scroll:GetPropertyChangedSignal("CanvasPosition"):Connect(function() self:_updatePillScroll() end)
-
-    trackConn(self._window, UserInputService.InputChanged:Connect(function(input)
-        if input.UserInputType ~= Enum.UserInputType.MouseWheel then return end
-        if not scroll.Visible or not self._page.Visible then return end
-        local mouse = UserInputService:GetMouseLocation()
-        local inset = GuiService:GetGuiInset()
-        local pos = Vector2.new(mouse.X - inset.X, mouse.Y - inset.Y)
-        local sPos, sSize = scroll.AbsolutePosition, scroll.AbsoluteSize
-        if pos.X >= sPos.X and pos.X <= sPos.X + sSize.X and pos.Y >= sPos.Y and pos.Y <= sPos.Y + sSize.Y then
-            self:_scrollPillBy(-input.Position.Z * PILL_SCROLL_STEP * 0.5)
+    local screen = make("ScreenGui", {Name="YanusHub",ResetOnSpawn=false,IgnoreGuiInset=true,
+        ZIndexBehavior=Enum.ZIndexBehavior.Sibling,DisplayOrder=50})
+    local parent
+    if type(gethui)=="function" then local ok,value=pcall(gethui);if ok then parent=value end end
+    local mounted = pcall(function()screen.Parent=parent or game:GetService("CoreGui")end)
+    if not mounted then screen.Parent=Players.LocalPlayer:WaitForChild("PlayerGui") end
+    local main = make("Frame", {Name="YanusWindow",AnchorPoint=Vector2.new(0.5,0.5),
+        Position=UDim2.fromScale(0.5,0.45),Size=UDim2.fromOffset(840,560),BackgroundColor3=C.WindowBg,
+        ClipsDescendants=true,Parent=screen})
+    corner(main,10);stroke(main,C.Border)
+    local scale=make("UIScale",{Scale=1,Parent=main})
+    local header=make("Frame",{Name="Header",Size=UDim2.new(1,0,0,44),BackgroundColor3=C.CardBg,Active=true,Parent=main})
+    make("TextLabel",{Text="yanus hub",Font=Enum.Font.GothamBold,TextSize=18,TextColor3=C.White,
+        TextXAlignment=Enum.TextXAlignment.Left,BackgroundTransparency=1,
+        Position=UDim2.fromOffset(16,0),Size=UDim2.new(1,-110,1,0),Parent=header})
+    local hide=make("TextButton",{Text="Hide",Font=Enum.Font.GothamMedium,TextSize=12,
+        AnchorPoint=Vector2.new(1,0.5),Position=UDim2.new(1,-12,0.5,0),Size=UDim2.fromOffset(60,26),
+        BackgroundColor3=C.Element,Parent=header});corner(hide,6)
+    local reopen=make("TextButton",{Text="yanus",Visible=false,Size=UDim2.fromOffset(76,28),
+        Position=UDim2.fromOffset(12,78),BackgroundColor3=C.Element,Parent=screen});corner(reopen,6)
+    local nav=make("ScrollingFrame",{Name="Navigation",Position=UDim2.fromOffset(12,50),
+        Size=UDim2.new(1,-24,0,32),BackgroundTransparency=1,BorderSizePixel=0,
+        CanvasSize=UDim2.new(),AutomaticCanvasSize=Enum.AutomaticSize.X,
+        ScrollingDirection=Enum.ScrollingDirection.X,ScrollBarThickness=2,Parent=main})
+    make("UIListLayout",{FillDirection=Enum.FillDirection.Horizontal,Padding=UDim.new(0,6),SortOrder=Enum.SortOrder.LayoutOrder,Parent=nav})
+    local content=make("Frame",{Position=UDim2.fromOffset(12,90),Size=UDim2.new(1,-24,1,-102),BackgroundTransparency=1,Parent=main})
+    local notices=make("Frame",{Name="Notifications",AnchorPoint=Vector2.new(1,0),Position=UDim2.new(1,-14,0,14),
+        Size=UDim2.fromOffset(330,280),BackgroundTransparency=1,ZIndex=200,Parent=screen})
+    make("UIListLayout",{Padding=UDim.new(0,6),SortOrder=Enum.SortOrder.LayoutOrder,Parent=notices})
+    local win=setmetatable({ScreenGui=screen,Main=main,_container=main,_content=content,_hotbarInner=nav,
+        _notificationHolder=notices,_notificationOrder=0,_connections={},_noDrag={},_tabs={},_uiVisible=true,_reopen=reopen},Window)
+    local function remember(c)table.insert(win._connections,c);return c end
+    remember(hide.MouseButton1Click:Connect(function()win:SetUIVisible(false)end))
+    remember(reopen.MouseButton1Click:Connect(function()win:SetUIVisible(true)end))
+    remember(UserInputService.InputBegan:Connect(function(input,processed)
+        if not processed and input.KeyCode==(opts.ToggleKey or Enum.KeyCode.RightShift) then win:ToggleUI() end
+    end))
+    local dragging,origin,position
+    remember(header.InputBegan:Connect(function(input)
+        if input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch then
+            if input.Position.X < hide.AbsolutePosition.X then dragging=input.UserInputType;origin=input.Position;position=main.Position end
         end
     end))
+    remember(UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType==Enum.UserInputType.MouseMovement or input.UserInputType==Enum.UserInputType.Touch) then
+            local delta=input.Position-origin
+            main.Position=UDim2.new(position.X.Scale,position.X.Offset+delta.X,position.Y.Scale,position.Y.Offset+delta.Y)
+        end
+    end))
+    remember(UserInputService.InputEnded:Connect(function(input)if input.UserInputType==dragging then dragging=nil end end))
+    local camera=workspace.CurrentCamera
+    local function fit()
+        if camera then local size=camera.ViewportSize;scale.Scale=math.clamp(math.min((size.X-24)/840,(size.Y-24)/560),0.35,1) end
+    end
+    fit()
+    if camera then remember(camera:GetPropertyChangedSignal("ViewportSize"):Connect(fit)) end
+    table.insert(Library._windows,screen);table.insert(Library._windowObjects,win)
+    return win
 end
-
+function Window:SetVisible(value)return self:SetUIVisible(value)end
+function Window:Toggle()return self:ToggleUI()end
+function Window:SetUIVisible(value)
+    self._uiVisible=value==true;self.Main.Visible=self._uiVisible;self._reopen.Visible=not self._uiVisible
+    return self._uiVisible
+end
+function Window:ToggleUI()return self:SetUIVisible(not self._uiVisible)end
+function Window:SetProfileVisible()return false end
+function Window:ToggleProfile()return false end
+function Window:SetLogo()return false end
+function Window:Notify(opts)
+    opts=opts or {}
+    if not self.ScreenGui.Parent then return nil end
+    local cards={}
+    for _,item in ipairs(self._notificationHolder:GetChildren())do if item:IsA("GuiObject")then cards[#cards+1]=item end end
+    if #cards>=3 then cards[1]:Destroy()end
+    self._notificationOrder+=1
+    local card=make("Frame",{Size=UDim2.new(1,0,0,76),BackgroundColor3=C.CardBg,LayoutOrder=self._notificationOrder,ZIndex=201,Parent=self._notificationHolder})
+    corner(card,6);stroke(card,C.Border)
+    make("TextLabel",{Text=tostring(opts.Title or "yanus hub"),Font=Enum.Font.GothamBold,TextSize=12,
+        TextXAlignment=Enum.TextXAlignment.Left,TextColor3=C.White,BackgroundTransparency=1,
+        Position=UDim2.fromOffset(10,6),Size=UDim2.new(1,-20,0,18),ZIndex=202,Parent=card})
+    make("TextLabel",{Text=tostring(opts.Content or opts.Description or ""),Font=Enum.Font.Gotham,TextSize=11,TextWrapped=true,
+        TextXAlignment=Enum.TextXAlignment.Left,TextYAlignment=Enum.TextYAlignment.Top,TextColor3=C.TextGray,BackgroundTransparency=1,
+        Position=UDim2.fromOffset(10,27),Size=UDim2.new(1,-20,0,42),ZIndex=202,Parent=card})
+    task.delay(math.clamp(tonumber(opts.Duration) or 5,2,12),function()if card.Parent then card:Destroy()end end)
+    return card
+end
+function Window:Destroy()
+    if self._destroyed then return end
+    self._destroyed=true
+    for _,c in ipairs(self._connections)do pcall(function()c:Disconnect()end)end
+    local q=getgenv().__TensenAutoQuest;if q and q.Enabled then q.Set(false)end
+    local i=table.find(Library._windows,self.ScreenGui);if i then table.remove(Library._windows,i)end
+    i=table.find(Library._windowObjects,self);if i then table.remove(Library._windowObjects,i)end
+    self.ScreenGui:Destroy()
+end
+function Window:_selectTab(tab)
+    for _,item in ipairs(self._tabs)do
+        local active=item==tab;item._page.Visible=active
+        item._hBtn.BackgroundColor3=active and C.Accent or C.Element
+        item._hBtn.TextColor3=active and C.AccentText or C.TextGray
+    end
+    self._activeTab=tab
+end
+function Window:AddTab(opts)
+    if type(opts)=="string"then opts={Name=opts}end
+    opts=opts or {}
+    local button=make("TextButton",{Text=opts.Name or "Tab",Font=Enum.Font.GothamMedium,TextSize=12,
+        AutomaticSize=Enum.AutomaticSize.X,Size=UDim2.fromOffset(0,28),BackgroundColor3=C.Element,Parent=self._hotbarInner})
+    corner(button,6);pad(button,0,0,12,12);autoOrder(button)
+    local page=make("Frame",{Size=UDim2.fromScale(1,1),BackgroundTransparency=1,Visible=false,Parent=self._content})
+    local pills=make("ScrollingFrame",{Size=UDim2.new(1,0,0,30),BackgroundTransparency=1,BorderSizePixel=0,
+        CanvasSize=UDim2.new(),AutomaticCanvasSize=Enum.AutomaticSize.X,ScrollingDirection=Enum.ScrollingDirection.X,ScrollBarThickness=2,Parent=page})
+    local row=make("Frame",{Size=UDim2.new(0,0,1,0),AutomaticSize=Enum.AutomaticSize.X,BackgroundTransparency=1,Parent=pills})
+    make("UIListLayout",{FillDirection=Enum.FillDirection.Horizontal,Padding=UDim.new(0,5),SortOrder=Enum.SortOrder.LayoutOrder,Parent=row})
+    local pages=make("Frame",{Position=UDim2.fromOffset(0,36),Size=UDim2.new(1,0,1,-36),BackgroundTransparency=1,Parent=page})
+    local tab=setmetatable({_window=self,_page=page,_hBtn=button,_pillRow=row,_pagesHolder=pages,_subTabs={}},Tab)
+    button.MouseButton1Click:Connect(function()self:_selectTab(tab)end)
+    table.insert(self._tabs,tab);if not self._activeTab then self:_selectTab(tab)end
+    return tab
+end
 function Tab:_selectSub(sub)
-    if self._activeSub==sub then return end
-    local prev=self._activeSub; self._activeSub=sub
-    if prev then prev._page.Visible=false; paint(prev._pill,"BackgroundColor3","WindowBg"); paint(prev._pill,"TextColor3","TextGray") end
-    sub._page.Visible=true; paint(sub._pill,"BackgroundColor3","PillActive"); paint(sub._pill,"TextColor3","White")
-    self:_scrollPillIntoView(sub._pill)
+    for _,item in ipairs(self._subTabs)do
+        local active=item==sub;item._page.Visible=active
+        item._pill.BackgroundColor3=active and C.PillActive or C.WindowBg
+    end
+    self._activeSub=sub
 end
-
+function Tab:_updatePillScroll()end
 function Tab:AddSubTab(name)
     name=tostring(name or "General"); local tab=self
     local pill=make("TextButton",{Text=name,Font=Enum.Font.GothamMedium,TextSize=12,TextColor3=C.TextGray,BackgroundColor3=C.WindowBg,Size=UDim2.new(0,0,0,24),AutomaticSize=Enum.AutomaticSize.X,Parent=self._pillRow})
@@ -24005,8 +22613,8 @@ local function newRow(card,h)
 end
 local function rowLabels(row,name,desc,rr)
     rr=rr or 0
-    make("TextLabel",{Text=name,Font=Enum.Font.GothamMedium,TextSize=13,TextColor3=C.White,TextXAlignment=Enum.TextXAlignment.Left,BackgroundTransparency=1,Position=UDim2.fromOffset(0,0),Size=desc and UDim2.new(1,-rr,0,14) or UDim2.new(1,-rr,1,0),Parent=row})
-    if desc then make("TextLabel",{Text=desc,Font=Enum.Font.Gotham,TextSize=11,TextColor3=C.TextDim,TextXAlignment=Enum.TextXAlignment.Left,BackgroundTransparency=1,Position=UDim2.fromOffset(0,16),Size=UDim2.new(1,-rr,0,12),Parent=row}) end
+    make("TextLabel",{Text=name,Font=Enum.Font.GothamMedium,TextSize=13,TextColor3=C.White,TextXAlignment=Enum.TextXAlignment.Left,TextTruncate=Enum.TextTruncate.AtEnd,BackgroundTransparency=1,Position=UDim2.fromOffset(0,0),Size=desc and UDim2.new(1,-rr,0,14) or UDim2.new(1,-rr,1,0),Parent=row})
+    if desc then make("TextLabel",{Text=desc,Font=Enum.Font.Gotham,TextSize=11,TextColor3=C.TextDim,TextXAlignment=Enum.TextXAlignment.Left,TextTruncate=Enum.TextTruncate.AtEnd,BackgroundTransparency=1,Position=UDim2.fromOffset(0,16),Size=UDim2.new(1,-rr,0,12),Parent=row}) end
 end
 
 function SubTab:AddToggle(opts)
@@ -24134,7 +22742,7 @@ end
 
 function SubTab:AddInput(opts)
     opts=opts or {}
-    local row=newRow(self._card,30); rowLabels(row,opts.Name or "Input",opts.Description,120)
+    local row=newRow(self._card,30); rowLabels(row,opts.Name or "Input",opts.Description,230)
     local holder=make("Frame",{Size=UDim2.fromOffset(110,22),AnchorPoint=Vector2.new(1,0.5),Position=UDim2.new(1,0,0.5,0),BackgroundColor3=C.Element,Parent=row})
     corner(holder,6)
     local box=make("TextBox",{Text=opts.Default or "",PlaceholderText=opts.Placeholder or "...",PlaceholderColor3=C.Placeholder,Font=Enum.Font.Gotham,TextSize=12,TextColor3=C.TextGray,TextXAlignment=Enum.TextXAlignment.Left,BackgroundTransparency=1,ClearTextOnFocus=false,ClipsDescendants=true,Position=UDim2.fromOffset(8,0),Size=UDim2.new(1,-30,1,0),Parent=holder})
@@ -24147,9 +22755,9 @@ function SubTab:AddDropdown(opts)
     opts=opts or {}
     local options=opts.Options or {}; local value=opts.Default or options[1] or ""
     local maxVisible=math.max(1,math.floor(opts.MaxVisible or 5)); local searchable=opts.Searchable==true
-    local IH=22; local IP=2; local SH=26; local LW=160
-    local row=newRow(self._card,30); rowLabels(row,opts.Name or "Dropdown",opts.Description,130)
-    local btn=make("TextButton",{Text="",Size=UDim2.fromOffset(120,22),AnchorPoint=Vector2.new(1,0.5),Position=UDim2.new(1,0,0.5,0),BackgroundColor3=C.Element,Parent=row})
+    local IH=22; local IP=2; local SH=26; local LW=300
+    local row=newRow(self._card,30); rowLabels(row,opts.Name or "Dropdown",opts.Description,230)
+    local btn=make("TextButton",{Text="",Size=UDim2.fromOffset(220,22),AnchorPoint=Vector2.new(1,0.5),Position=UDim2.new(1,0,0.5,0),BackgroundColor3=C.Element,Parent=row})
     corner(btn,6)
     local vl=make("TextLabel",{Text=tostring(value),Font=Enum.Font.Gotham,TextSize=12,TextColor3=C.TextGray,TextXAlignment=Enum.TextXAlignment.Left,TextTruncate=Enum.TextTruncate.AtEnd,BackgroundTransparency=1,Position=UDim2.fromOffset(8,0),Size=UDim2.new(1,-26,1,0),Parent=btn})
     sortIcon(btn)
@@ -24233,11 +22841,11 @@ function SubTab:AddMultiDropdown(opts)
     opts=opts or {}
     local options=opts.Options or {}
     local maxVisible=math.max(1,math.floor(opts.MaxVisible or 5)); local searchable=opts.Searchable==true
-    local IH=22; local IP=2; local SH=26; local LW=160
+    local IH=22; local IP=2; local SH=26; local LW=300
     local selected={}
     if type(opts.Default)=="table" then for _,o in ipairs(opts.Default) do selected[o]=true end end
-    local row=newRow(self._card,30); rowLabels(row,opts.Name or "Dropdown",opts.Description,130)
-    local btn=make("TextButton",{Text="",Size=UDim2.fromOffset(120,22),AnchorPoint=Vector2.new(1,0.5),Position=UDim2.new(1,0,0.5,0),BackgroundColor3=C.Element,Parent=row})
+    local row=newRow(self._card,30); rowLabels(row,opts.Name or "Dropdown",opts.Description,230)
+    local btn=make("TextButton",{Text="",Size=UDim2.fromOffset(220,22),AnchorPoint=Vector2.new(1,0.5),Position=UDim2.new(1,0,0.5,0),BackgroundColor3=C.Element,Parent=row})
     corner(btn,6)
     local vl=make("TextLabel",{Text="None",Font=Enum.Font.Gotham,TextSize=12,TextColor3=C.TextGray,TextXAlignment=Enum.TextXAlignment.Left,TextTruncate=Enum.TextTruncate.AtEnd,BackgroundTransparency=1,Position=UDim2.fromOffset(8,0),Size=UDim2.new(1,-26,1,0),Parent=btn})
     sortIcon(btn)
@@ -24676,6 +23284,7 @@ end)()
 			local Movement, Protection, Shop, Farm, Juzo, Mihawk, Roger, BigMama, Stats, Fishing
 			local SellFish, CraftBait, StoreFruit, Teleport, Tween, Server, Trade, Players, Islands, Style
 			local espTab, autoFarmPlayerTab, styleTab, Settings, Visuals, Configs
+            local ManualFarm
 
 			do
 				local inBattleRoyale = game.PlaceId == 11424731604
@@ -24684,7 +23293,7 @@ end)()
 				local function deadTab()
 					local dead = { TensenDead = true }
 
-					local function deadIndex() end
+					local function deadIndex() return function() return dead end end
 
 					return setmetatable(dead, { __index = deadIndex })
 				end
@@ -24697,63 +23306,42 @@ end)()
 					return window:AddTab(info)
 				end
 
-				local playerTab =
-					window:AddTab({ Name = "Player", Icon = "player", Subtitle = "Movement, protection and shop" })
-				Movement = playerTab:AddSubTab("Movement")
-				Protection = playerTab:AddSubTab("Protection")
-				Shop = playerTab:AddSubTab("Shop")
-				local autoFarmTab = addTab({ Name = "Auto Farm", Icon = "swords", Subtitle = "Farming and bosses" })
-				local Config = autoFarmTab:AddSubTab("Config")
-				Farm = autoFarmTab:AddSubTab("Farm")
-				Juzo = autoFarmTab:AddSubTab("Juzo")
-				Mihawk = autoFarmTab:AddSubTab("Mihawk")
-				Roger = autoFarmTab:AddSubTab("Roger")
-				BigMama = autoFarmTab:AddSubTab("Big Mama")
-
-				if inBattleRoyale then
-					BigMama = window
-						:AddTab({ Name = "Dungeon", Icon = "swords", Subtitle = "Whole Cake / Katakuri" })
-						:AddSubTab("Big Mama")
-				end
-
-				Stats = autoFarmTab:AddSubTab("Stats")
-				local fishingTab =
-					addTab({ Name = "Auto Fishing", Icon = "target", Subtitle = "Fishing, bait and fruit" })
-				Fishing = fishingTab:AddSubTab("Fishing")
-				SellFish = fishingTab:AddSubTab("Sell Fish")
-				CraftBait = fishingTab:AddSubTab("Craft Bait")
-				StoreFruit = fishingTab:AddSubTab("Store Fruit")
-				local travelTab = addTab({ Name = "Traveling", Icon = "compass", Subtitle = "Teleport and tween" })
-				Teleport = travelTab:AddSubTab("Teleport")
-				Tween = travelTab:AddSubTab("Tween")
-				Server = addTab({ Name = "Private Server", Icon = "shield", Subtitle = "Private server" }):AddSubTab(
-					"Server"
-				)
-				Trade = addTab({ Name = "Auto Trade", Icon = "refresh", Subtitle = "Alt to main" }):AddSubTab("Trade")
-				local espMainTab = window:AddTab({ Name = "ESP", Icon = "eye", Subtitle = "See players and islands" })
-				Players = espMainTab:AddSubTab("Players")
-				Islands = espMainTab:AddSubTab("Islands")
-				Style = espMainTab:AddSubTab("Style")
-				espTab = nil
-				autoFarmPlayerTab = nil
-				styleTab = nil
-
-				if inBattleRoyale then
-					local brTab =
-						window:AddTab({ Name = "Battle Royale", Icon = "swords", Subtitle = "Battle Royale only" })
-					espTab = brTab:AddSubTab("ESP")
-					autoFarmPlayerTab = brTab:AddSubTab("Auto Farm Player")
-					styleTab = brTab:AddSubTab("Style")
-				end
-
-				local miscTab = window:AddTab({ Name = "Misc", Icon = "settings", Subtitle = "Everything else" })
-				Settings = miscTab:AddSubTab("Settings")
-				Visuals = miscTab:AddSubTab("Visuals")
-				Configs = miscTab:AddSubTab("Configs")
+                local questTab = window:AddTab({Name="Farm",Subtitle="Quest farming"})
+                Farm = questTab:AddSubTab("Quest")
+                local autoFarmTab = addTab({Name="Other farms",Subtitle="Combat, bosses and resources"})
+                local Config = autoFarmTab:AddSubTab("Combat settings")
+                ManualFarm = autoFarmTab:AddSubTab("Manual NPC / legacy")
+                Juzo = autoFarmTab:AddSubTab("Juzo")
+                Mihawk = autoFarmTab:AddSubTab("Mihawk")
+                Roger = autoFarmTab:AddSubTab("Roger")
+                BigMama = autoFarmTab:AddSubTab("Big Mama")
+                if inBattleRoyale then BigMama=window:AddTab({Name="Dungeon"}):AddSubTab("Big Mama") end
+                Stats = autoFarmTab:AddSubTab("Stats")
+                Fishing = autoFarmTab:AddSubTab("Fishing")
+                SellFish = autoFarmTab:AddSubTab("Sell fish")
+                CraftBait = autoFarmTab:AddSubTab("Craft bait")
+                StoreFruit = autoFarmTab:AddSubTab("Store fruit")
+                Shop = autoFarmTab:AddSubTab("Merchant")
+                local travelTab = window:AddTab({Name="Travel",Subtitle="Movement between locations"})
+                Teleport = travelTab:AddSubTab("Teleport")
+                Tween = travelTab:AddSubTab("Tween")
+                Server = travelTab:AddSubTab("Private server")
+                Islands = travelTab:AddSubTab("Island ESP")
+                local utilityTab = window:AddTab({Name="QoL",Subtitle="Movement and protection"})
+                Movement = utilityTab:AddSubTab("Movement")
+                Protection = utilityTab:AddSubTab("Protection")
+                local miscTab = window:AddTab({Name="Settings",Subtitle="Performance and configuration"})
+                Settings = miscTab:AddSubTab("Performance")
+                Visuals = miscTab:AddSubTab("Options")
+                Configs = miscTab:AddSubTab("Configs")
+                Style = miscTab:AddSubTab("ESP settings")
+                Players,Trade=deadTab(),deadTab()
+                espTab,autoFarmPlayerTab,styleTab=nil,nil,nil
+                if inBattleRoyale then espTab=travelTab:AddSubTab("Loot ESP");styleTab=miscTab:AddSubTab("Loot style")end
 				local settingsMeta = getmetatable(Settings)
 				local index = settingsMeta and settingsMeta.__index
 
-				if type(index) == "table" and not index.TensenDescPatched then
+				if false and type(index) == "table" and not index.TensenDescPatched then -- controls already render their own descriptions
 					index.TensenDescPatched = true
 
 					-- adds a description label under a UI element
@@ -24961,15 +23549,7 @@ end)()
 
 			Farm:AddSection("Farm")
 
-			Farm:AddParagraph({
-				Title = "Kaitun Setup",
-				Text = [[Turn on Auto Farm + Auto Haki + Auto Get Scroll
-Lvl 80 + 25k peli gets haki
-Lvl 325 gets world scroll
-Lvl 425 + scroll goes to second sea
-Using a private server? Set your code and turn on Auto Join Private Server
-Private server travel needs teleport queue support]],
-			})
+
 
             addStatus(Farm, "AutoQuest")
             Farm:AddButton({
@@ -24987,7 +23567,9 @@ Private server travel needs teleport queue support]],
             })
             Farm:AddDropdown({
                 Name = "Quest",
-                Description = "Choose Noah's repeat quest, or farm a quest you accept yourself.",
+                Description = "Choose a named quest, a nearby recommendation, or the quest you accepted yourself.",
+                Searchable = true,
+                Flag = "QuestProfileChoice",
                 Options = getgenv().__TensenAutoQuest.Modes,
                 Default = getgenv().__TensenAutoQuest.Mode,
                 Callback = function(value)
@@ -24997,18 +23579,33 @@ Private server travel needs teleport queue support]],
             })
             Farm:AddInput({
                 Name = "Quest enemy (optional)",
-                Description = "For current-quest mode: exact NPC name if automatic matching fails.",
+                Description = "Optional current-quest override; required enemy name for Custom quest mode.",
+                Flag = "QuestEnemyOverride",
                 Default = "", Placeholder = "Auto from quest progress",
                 Callback = function(value) getgenv().__TensenAutoQuest.Configure(nil, value) end,
             })
+            Farm:AddInput({
+                Name="Custom quest giver (optional)",Description="Exact NPC name for Custom quest mode.",Default="",Placeholder="For example: Robert",Flag="QuestGiverOverride",
+                Callback=function(value)getgenv().__TensenAutoQuest.Configure(nil,nil,value)end,
+            })
             getgenv().__TensenAutoQuest.Toggle = Farm:AddToggle({
                 Name = "Auto Farm",
-                Description = "Farm the selected quest. Noah repeats automatically at level 10+; current-quest mode waits for you to accept each quest.",
+                Description = "Collect and farm the selected quest. New profiles marked test need in-game verification.",
                 Default = false,
                 -- No persistence flag: this controller must not start from a saved config.
                 Callback = function(enabled) getgenv().__TensenAutoQuest.Set(enabled) end,
             })
 
+            Farm = ManualFarm
+			Farm:AddParagraph({
+				Title = "Kaitun Setup",
+				Text = [[Turn on Auto Farm + Auto Haki + Auto Get Scroll
+Lvl 80 + 25k peli gets haki
+Lvl 325 gets world scroll
+Lvl 425 + scroll goes to second sea
+Using a private server? Set your code and turn on Auto Join Private Server
+Private server travel needs teleport queue support]],
+			})
 			addStatus(Farm, "Farm")
 
 			Farm:AddToggle({
@@ -26214,94 +24811,7 @@ Private server travel needs teleport queue support]],
 				Callback = saveTo("AutoJoinPrivateServer"),
 			})
 
-			Trade:AddSection("Settings")
-			addStatus(Trade, "Trade")
-
-			Trade:AddInput({
-				Name = "Main Account (receiver)",
-				Description = "Username of the account that receives items",
-				Default = tostring(getgenv().TradeMainAccount or ""),
-				Placeholder = "Exact username",
-				Flag = "TradeMainAccountInput",
-				Callback = saveTo("TradeMainAccount"),
-			})
-
-			do
-				local options = mergeOptions(itemNames, getgenv().TradeItemAlt)
-				local TradeItemAltDropdown = savedOptionsFor("TradeItemAltDropdown")
-
-				Trade:AddMultiDropdown({
-					Name = "Items the ALT sends",
-					Description = "What the alt puts in the trade",
-					Options = mergeOptions(options, TradeItemAltDropdown),
-					Default = normalizeSelectedItems(getgenv().TradeItemAlt),
-					Searchable = true,
-					Flag = "TradeItemAltDropdown",
-					Callback = function(selected)
-						getgenv().TradeItemAlt = normalizeSelectedItems(selected)
-
-						autosave()
-					end,
-				})
-			end
-
-			do
-				local options = mergeOptions(itemNames, getgenv().TradeItemMain)
-				local TradeItemMainDropdown = savedOptionsFor("TradeItemMainDropdown")
-
-				Trade:AddMultiDropdown({
-					Name = "Items the MAIN sends back",
-					Description = "What the main puts back in the trade",
-					Options = mergeOptions(options, TradeItemMainDropdown),
-					Default = normalizeSelectedItems(getgenv().TradeItemMain),
-					Searchable = true,
-					Flag = "TradeItemMainDropdown",
-					Callback = function(selected)
-						getgenv().TradeItemMain = normalizeSelectedItems(selected)
-
-						autosave()
-					end,
-				})
-			end
-
-			Trade:AddSlider({
-				Name = "Main sends back (qty)",
-				Description = "How many of each the main gives back",
-				Min = 0,
-				Max = 10,
-				Default = getgenv().TradeMainSendQty or 1,
-				Flag = "TradeMainSendQtySlider",
-				Callback = saveTo("TradeMainSendQty"),
-			})
-
-			Trade:AddSlider({
-				Name = "Wait For Trade Window",
-				Description = "How long to wait for the trade to open",
-				Min = 1,
-				Max = 10,
-				Suffix = "m",
-				Default = getgenv().TradeTimeout or 1,
-				Flag = "TradeTimeoutSlider",
-				Callback = saveTo("TradeTimeout"),
-			})
-
-			Trade:AddToggle({
-				Name = "Auto Trade",
-				Description = "Trade items from the alt to the main nonstop",
-				Default = getgenv().AutoTrade or false,
-				Flag = "AutoTradeToggle",
-				Callback = saveTo("AutoTrade"),
-			})
-
-			Trade:AddButton({
-				Name = "Show Trade Status",
-				Description = "Print the trade state to the console",
-				Callback = function()
-					if getgenv().TradeInfo then
-						getgenv().TradeInfo()
-					end
-				end,
-			})
+            -- Auto-trade controls removed; checkpoint retains them.
 
 			-- ----------------------------------------------------------------
 			-- 4.11 Hub / ESP tabs
@@ -26363,54 +24873,7 @@ Private server travel needs teleport queue support]],
 				})
 			end
 
-			Players:AddSection("Players")
-			addEspToggle(Players, "Player ESP", "Players", "Show a card over every other player")
-			addEspToggle(Players, "Show Name", "PlayerName", "Their display name on the card")
-			addEspToggle(Players, "Show Distance", "PlayerDistance", "How far away they are in studs")
-			addEspToggle(Players, "Show Health", "PlayerHealth", "A health bar under the name")
-			addEspToggle(Players, "Show Stamina", "PlayerStamina", "Show their stamina bar")
-			addEspToggle(Players, "Show Devil Fruit", "PlayerFruit", "Show their devil fruit")
-			addEspToggle(
-				Players,
-				"Only Fruit They Ate",
-				"PlayerFruitEatenOnly",
-				"Ignore fruit sitting in their bag. Always on in Battle Royale"
-			)
-			addEspToggle(Players, "Show Weapon", "PlayerWeapon", "Show their equipped weapon")
-			addEspToggle(Players, "Highlight Teammates", "PlayerTeamESP", "Highlight your teammates")
-			addEspToggle(Players, "Count Same Faction", "PlayerTeamFaction", "Treat faction members as teammates")
-
-			Players:AddInput({
-				Name = "Teammate Names",
-				Description = "Teammate names, separated by commas",
-				Default = tostring(getgenv().ESP.PlayerTeamNames or ""),
-				Placeholder = "xorvaxa, anothername",
-				Flag = "ESP_PlayerTeamNames",
-				Callback = function(teammateNames)
-					getgenv().ESP.PlayerTeamNames = tostring(teammateNames or "")
-
-					autosave()
-				end,
-			})
-
-			addEspToggle(Players, "Highlight Body", "PlayerHighlight", "Glow their whole body through walls")
-			addEspToggle(Players, "Tracers", "PlayerTracers", "Draw a line from the bottom of your screen to them")
-			addEspSlider(
-				Players,
-				"Player Range",
-				"PlayerMaxDist",
-				100,
-				10000,
-				"Only show players this close to you",
-				" studs"
-			)
-			addEspColor(Players, "Player Color", "PlayerColor", "Colour of the card edge glow and tracer")
-			addEspColor(Players, "Stamina Bar Color", "PlayerStaminaColor", "Colour of the stamina bar")
-
-			addEspColor(Players, "Teammate Color", "PlayerTeamColor", "What colour your teammates go")
-			addEspToggle(Players, "Party Counts As Team", "PlayerTeamParty", "Treat party members as teammates")
-			addEspToggle(Players, "Mark Everyone Else Red", "PlayerEnemyESP", "Use a separate colour for enemies")
-			addEspColor(Players, "Enemy Color", "PlayerEnemyColor", "Enemy highlight colour")
+            -- Player tracking controls removed; island navigation remains.
 			Islands:AddSection("Islands")
 			addEspToggle(Islands, "Island ESP", "Islands", "Show a marker on every island")
 			addEspToggle(Islands, "Show Distance", "IslandDistance", "How far the island is in studs")
@@ -26425,9 +24888,6 @@ Private server travel needs teleport queue support]],
 			)
 			addEspColor(Islands, "Island Color", "IslandColor", "Colour of the island markers")
 			Style:AddSection("Style")
-			addEspToggle(Style, "Animated Border", "AnimatedBorder", "Spin a glow around the edge of each card")
-			addEspToggle(Style, "Pulse", "Pulse", "Make highlights and island markers breathe")
-			addEspToggle(Style, "Rainbow", "Rainbow", "Cycle every ESP colour through the rainbow")
 			addEspToggle(Style, "Use Menu Accent", "MenuAccent", "Use the menu theme accent instead of your picks")
 			addEspSlider(Style, "Text Size", "TextSize", 9, 18, "Size of the ESP text", "px")
 			addEspSlider(Style, "Refresh Rate", "RefreshRate", 15, 60, "ESP updates per second", " fps")
@@ -26577,179 +25037,7 @@ Private server travel needs teleport queue support]],
 				})
 			end
 
-			if autoFarmPlayerTab then
-				autoFarmPlayerTab:AddSection("Target")
-				addStatus(autoFarmPlayerTab, "PvP")
-
-				local targetDropdown = autoFarmPlayerTab:AddDropdown({
-					Name = "Select Player",
-					Description = "Choose a player to farm",
-					Options = mergeOptions({ "None" }, getgenv().SelectedPlayer),
-					Default = firstOr(getgenv().SelectedPlayer, "None"),
-					Searchable = true,
-					Flag = "SelectPlayerDropdown",
-					Callback = function(selectPlayer)
-						if type(selectPlayer) == "table" then
-							selectPlayer = selectPlayer[1]
-						end
-
-						getgenv().SelectedPlayer = selectPlayer or "None"
-
-						autosave()
-					end,
-				})
-
-				autoFarmPlayerTab:AddButton({
-					Name = "Refresh Player List",
-					Description = "Refresh living players, nearest first",
-					-- refresh button: fills the player dropdown with nearby living players
-					Callback = function()
-						local names = getgenv().NearbyPlayerNames()
-
-						if #names == 0 then
-							names = { "None" }
-						end
-
-						pcall(function()
-							targetDropdown:SetOptions(names)
-						end)
-
-						if not table.find(names, getgenv().SelectedPlayer) then
-							getgenv().SelectedPlayer = names[1]
-						end
-
-						local opts = { Title = "Players" }
-						local count = names[1] == "None" and 0
-
-						if count then
-							opts.Content = string.format("Found %d alive", count)
-							opts.Type = "success"
-							opts.Duration = 3
-							window:Notify(opts)
-						end
-					end,
-				})
-
-				autoFarmPlayerTab:AddToggle({
-					Name = "Auto Target Nearest",
-					Description = "Target the nearest player",
-					Default = getgenv().PvPAutoTarget ~= false,
-					Flag = "PvPAutoTargetToggle",
-					Callback = saveTo("PvPAutoTarget"),
-				})
-
-				autoFarmPlayerTab:AddToggle({
-					Name = "Skip Teammates",
-					Description = "Skip teammates",
-					Default = getgenv().PvPSkipTeammates ~= false,
-					Flag = "PvPSkipTeammatesToggle",
-					Callback = saveTo("PvPSkipTeammates"),
-				})
-
-				autoFarmPlayerTab:AddToggle({
-					Name = "Tween To Player",
-					Description = "Farm the selected player",
-					Default = false,
-					Flag = "TweenToPlayerToggle",
-					Callback = function(tweenToPlayer)
-						getgenv().TweenToPlayer = tweenToPlayer
-					end,
-				})
-
-				autoFarmPlayerTab:AddSection("Fight")
-
-				autoFarmPlayerTab:AddToggle({
-					Name = "Fake M1 On Block",
-					Description = "Feint while the target blocks",
-					Default = getgenv().PvPFeintOnBlock ~= false,
-					Flag = "PvP_PvPFeintOnBlock",
-					Callback = saveTo("PvPFeintOnBlock"),
-				})
-
-				autoFarmPlayerTab:AddToggle({
-					Name = "M1 Back And Forth",
-					Description = "Move back and forth while attacking",
-					Default = getgenv().PvPShuffle == true,
-					Flag = "PvP_PvPShuffle",
-					Callback = saveTo("PvPShuffle"),
-				})
-
-				autoFarmPlayerTab:AddToggle({
-					Name = "Auto Equip Weapon",
-					Description = "Equip your selected weapon",
-					Default = getgenv().PvPAutoEquip ~= false,
-					Flag = "PvP_PvPAutoEquip",
-					Callback = saveTo("PvPAutoEquip"),
-				})
-
-				autoFarmPlayerTab:AddSlider({
-					Name = "Player Offset",
-					Description = "Height above the target",
-					Min = 0,
-					Max = 25,
-					Suffix = " studs",
-					Default = tonumber(getgenv().PvPOffsetY) or 9,
-					Flag = "PvPOffsetSlider",
-					Callback = saveTo("PvPOffsetY"),
-				})
-
-				autoFarmPlayerTab:AddSlider({
-					Name = "Target Range",
-					Description = "Maximum chase distance",
-					Min = 100,
-					Max = 5000,
-					Suffix = " studs",
-					Default = math.floor(tonumber(getgenv().PvPRange) or 2000),
-					Flag = "PvPRangeSlider",
-					Callback = saveTo("PvPRange"),
-				})
-
-				autoFarmPlayerTab:AddSlider({
-					Name = "Back And Forth Distance",
-					Description = "Back and forth distance",
-					Min = 0,
-					Max = 30,
-					Suffix = " studs",
-					Default = math.floor(tonumber(getgenv().PvPShuffleStuds) or 12),
-					Flag = "PvP_PvPShuffleStuds",
-					Callback = function(backAndForthDistance)
-						getgenv().PvPShuffleStuds = backAndForthDistance
-
-						queueAutoSave()
-					end,
-				})
-
-				autoFarmPlayerTab:AddSlider({
-					Name = "Back And Forth Speed",
-					Description = "Movement interval. Lower is faster",
-					Min = 100,
-					Max = 2000,
-					Suffix = "ms",
-					Default = math.floor((tonumber(getgenv().PvPShufflePeriod) or 0.4) * 1000 + 0.5),
-					Flag = "PvP_PvPShufflePeriod",
-					Callback = function(backAndForthSpeed)
-						getgenv().PvPShufflePeriod = backAndForthSpeed / 1000
-
-						autosave()
-					end,
-				})
-
-				autoFarmPlayerTab:AddSlider({
-					Name = "Fake M1 Retry",
-					Description = "Delay between feints",
-					Min = 1,
-					Max = 15,
-					Suffix = "s",
-					Default = math.floor(tonumber(getgenv().PvPFeintRetry) or 5),
-					Flag = "PvP_PvPFeintRetry",
-					Callback = saveTo("PvPFeintRetry"),
-				})
-
-				autoFarmPlayerTab:AddParagraph({
-					Title = "Teammates",
-					Text = "Add teammates under ESP > Teammate Names.",
-				})
-			end
+            -- Automated player combat controls removed.
 
 			-- ----------------------------------------------------------------
 			-- 4.12 Hub / Settings, Movement, Protection, Visuals
@@ -28021,8 +26309,11 @@ Private server travel needs teleport queue support]],
 				Configs:AddButton({
 					Name = "Load Config",
 					Description = "Load the selected config",
-					-- load config button: does nothing (the dump's callback returns right away)
-					Callback = function() end,
+                    Callback = function()
+                        if not selectedConfig then notify("Config","Pick a config first","warning");return end
+                        local ok,result=pcall(function()return tensenUILib:LoadConfig(selectedConfig)end)
+                        notify("Config",ok and result and("Loaded "..selectedConfig)or"Could not load that config",ok and result and"success"or"warning")
+                    end,
 				})
 
 				Configs:AddButton({
@@ -28060,38 +26351,6 @@ Private server travel needs teleport queue support]],
 					end,
 				})
 
-				Configs:AddSection("Autoload")
-
-				Configs:AddButton({
-					Name = "Set As Autoload",
-					Description = "Load this config on startup",
-					-- delete config button
-					Callback = function()
-						if not selectedConfig then
-							notify("Config", "Pick a config first", "warning")
-							return
-						end
-
-						local ok = pcall(getgenv().__TensenWF, "Tensen Hub/Configs/autoload.txt", selectedConfig)
-						refreshAutoload()
-						notify(
-							"Config",
-							ok and selectedConfig .. " will autoload" or "Could not set the autoload",
-							ok and "success" or "error"
-						)
-					end,
-				})
-
-				Configs:AddButton({
-					Name = "Clear Autoload",
-					Description = "Clear the startup config",
-					Callback = function()
-						pcall(delfile, "Tensen Hub/Configs/autoload.txt")
-						refreshAutoload()
-						notify("Config", "Autoload cleared", "info")
-					end,
-				})
-
 				Configs:AddToggle({
 					Name = "Auto Save",
 					Description = "Automatically keep your settings saved to " .. defaultConfig,
@@ -28111,42 +26370,7 @@ Private server travel needs teleport queue support]],
 					end,
 				})
 
-				Configs:AddToggle({
-					Name = "Auto Load",
-					Description = "Automatically load " .. defaultConfig .. " when the script runs",
-					Default = getgenv().AutoLoad ~= false,
-					Flag = "AutoLoadToggle",
-					Callback = saveTo("AutoLoad"),
-				})
-
-				autoloadParagraph = Configs:AddParagraph({ Title = "Autoload", Text = "Nothing autoloads" })
-				refreshAutoload()
-				local autoload = readAutoload()
-
-				if not autoload and getgenv().AutoLoad ~= false then
-					autoload = defaultConfig
-				end
-
-				if autoload then
-					local loaded = false
-
-					pcall(function()
-						loaded = isfile("Tensen Hub/Configs/" .. autoload .. ".json")
-					end)
-
-					if loaded then
-						task.spawn(function()
-							task.wait(1)
-
-							if tensenUILib:LoadConfig(autoload) then
-								queueAutoSave()
-								notify("Config", "Autoloaded " .. autoload, "success")
-							else
-								notify("Config", "Autoload config " .. autoload .. " is missing", "warning")
-							end
-						end)
-					end
-				end
+                -- Configurations are loaded explicitly; no active feature starts from a saved config.
 
 				task.spawn(function()
 					while true do
@@ -37541,67 +35765,7 @@ Private server travel needs teleport queue support]],
 					end)
 				end
 
-				-- Tween To Player
-				local running = false
-				local targetName = nil
-
-				startLoop("F2.TweenToPlayer", 0.4, function()
-					local otherFarm = getgenv().autofarm
-						or getgenv().haki
-						or getgenv().AutoJuzoBoss
-						or getgenv().AutoMihawkBoss
-						or getgenv().AutoRogerBoss
-						or getgenv().AutoFishing
-						or getgenv().AutoMerchant
-						or getgenv().StartTweenIsland
-						or getgenv().TweenToNPC
-					if not getgenv().TweenToPlayer or otherFarm then
-						if running and tweenState().Enabled and tweenState().IsMobTween then
-							stopTween()
-						end
-						running = false
-						targetName = nil
-						return
-					end
-					local character = LocalPlayer.Character
-					local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-					if not humanoid or humanoid.Health <= 0 then
-						if tweenState().Enabled then
-							stopTween()
-						end
-						running = true
-						targetName = nil
-						return
-					end
-					local player = getgenv().PvPTarget()
-					if not player or (targetName and targetName ~= player.Name) then
-						if tweenState().Enabled then
-							stopTween()
-						end
-						running = true
-						targetName = nil
-						if not player then
-							return
-						end
-					end
-					if getgenv().PvPAutoEquip ~= false then
-						pcall(getgenv().equipFarmWeapon)
-					end
-					running = true
-					if tweenState().Enabled then
-						return
-					end
-
-					targetName = player.Name
-					getgenv().TweenToMob2({
-						MobName = player.Name,
-						BossKey = "PvP",
-						Speed = getgenv().TweenSpeedMaster or 70,
-						Offset = Vector3.new(0, tonumber(getgenv().PvPOffsetY) or 9, 0),
-						Container = player.Character and player.Character.Parent or workspace,
-					})
-				end)
-			end
+            end
 
 			-- buso keeper
 			do
@@ -43948,352 +42112,7 @@ Private server travel needs teleport queue support]],
 				end)
 			end
 
-			-- auto trade (Trade tab, the guis only exist in the trade place)
-			--   alt loop   request a trade with the main, wait for TradeGUI, add the picked items, accept, wait until it closes
-			--   main loop  accept the pending trade, add the "main sends back" items, accept, wait
-			-- tradeStockFor(isMain) is rebuilt from its callers. one call before pressing Accept couldn't be identified and is skipped.
-			-- logs go to BMLog / print with "[Trade] "
-			do
-				local Players = game:GetService("Players")
-				local ReplicatedStorage = game:GetService("ReplicatedStorage")
-				local HttpService = game:GetService("HttpService")
-				local localPlayer = Players.LocalPlayer
-
-				-- runs `body` in a loop until another spawnLoop with the same name replaces it
-				local function spawnLoop(name, body)
-					local loops = getgenv().__TensenLoops
-					if type(loops) ~= "table" then
-						loops = {}
-						getgenv().__TensenLoops = loops
-					end
-					local token = {}
-					loops[name] = token
-					task.spawn(function()
-						task.wait()
-						body(function()
-							return loops[name] == token
-						end)
-					end)
-				end
-
-				local function log(fmt, ...)
-					local text = "[Trade] " .. (select("#", ...) > 0 and string.format(fmt, ...) or fmt)
-					local f = getgenv().BMLog
-					if f then
-						pcall(f, text)
-					else
-						print(text)
-					end
-				end
-
-				-- turns a dropdown value (string, list or set) into a list of names
-				local function toList(value)
-					local list = {}
-					local normalize = getgenv().NormalizeSelectedItems
-					if type(normalize) == "function" then
-						local ok, result = pcall(normalize, value)
-						if ok and type(result) == "table" then
-							return result
-						end
-					end
-					if type(value) == "table" then
-						for k, v in pairs(value) do
-							if type(k) == "number" and type(v) == "string" then
-								table.insert(list, v)
-							elseif type(k) == "string" and v == true then
-								table.insert(list, k)
-							end
-						end
-					elseif type(value) == "string" then
-						table.insert(list, value)
-					end
-					return list
-				end
-
-				local function pickedNames(isMain)
-					return toList(isMain and getgenv().TradeItemMain or getgenv().TradeItemAlt or {})
-				end
-
-				-- see TradeInfo
-				local function inventoryCount(item)
-					local stats = ReplicatedStorage:FindFirstChild("Stats" .. localPlayer.Name)
-					if not stats then
-						return 0
-					end
-					local inventory = stats:FindFirstChild("Inventory")
-					local value = inventory and inventory:FindFirstChild("Inventory")
-					if not value or not value.Value or value.Value == "" then
-						return 0
-					end
-					local ok, data = pcall(function()
-						return HttpService:JSONDecode(value.Value)
-					end)
-					if not ok or type(data) ~= "table" then
-						return 0
-					end
-					local function amountOf(v)
-						if type(v) == "number" then
-							return v
-						end
-						if type(v) == "table" and v.Amount then
-							return v.Amount
-						end
-						return 1
-					end
-					if data[item] ~= nil then
-						return amountOf(data[item])
-					end
-					local wanted = string.lower((string.gsub(item, "[%s%-_']", "")))
-					for key, v in pairs(data) do
-						if string.lower((string.gsub(tostring(key), "[%s%-_']", ""))) == wanted then
-							return amountOf(v)
-						end
-					end
-					return 0
-				end
-
-				local function isMainAccount()
-					return localPlayer.Name == getgenv().TradeMainAccount
-				end
-
-				local function enabled()
-					if not getgenv().AutoTrade then
-						return false
-					end
-					if getgenv().TradeMainAccount == "" then
-						return false
-					end
-					return true
-				end
-
-				-- how many items this side still has to send
-				local function stockFor(isMain)
-					local total = 0
-					for _, name in ipairs(pickedNames(isMain)) do
-						local count = inventoryCount(name)
-						if isMain then
-							count = math.min(count, tonumber(getgenv().TradeMainSendQty) or 1)
-						end
-						total += count
-					end
-					return total
-				end
-				if not getgenv().tradeStockFor then
-					getgenv().tradeStockFor = stockFor
-				end
-
-				-- clicks a GUI button (firesignal, else its connections); true when it could
-				local function clickButton(button)
-					if not button then
-						return false
-					end
-					if firesignal then
-						pcall(firesignal, button.Activated)
-						pcall(firesignal, button.MouseButton1Click)
-					end
-					for _, signal in ipairs({ button.Activated, button.MouseButton1Click, button.MouseButton1Down }) do
-						pcall(function()
-							for _, connection in ipairs(getconnections(signal)) do
-								connection:Fire()
-							end
-						end)
-					end
-					return true
-				end
-
-				local function tradeGui()
-					local playerGui = localPlayer:FindFirstChild("PlayerGui")
-					return playerGui and playerGui:FindFirstChild("TradeGUI")
-				end
-
-				-- opens the trade request through the trade menu; true when it clicked
-				local function requestTrade()
-					local playerGui = localPlayer:FindFirstChild("PlayerGui")
-					local menu = playerGui and playerGui:FindFirstChild("TradeMenu")
-					menu = menu and menu:FindFirstChild("Main")
-					menu = menu and menu:FindFirstChild("Menu")
-					local send = menu and menu:FindFirstChild("SendTrades")
-					local user = send and send:FindFirstChild("User")
-					local input = user and user:FindFirstChild("Input")
-					local trade = send and send:FindFirstChild("Trade")
-					if not input or not input:IsA("TextBox") or not trade then
-						return false
-					end
-					input.Text = getgenv().TradeMainAccount
-					if input.Text ~= getgenv().TradeMainAccount then
-						return false
-					end
-					log("requesting a trade with %s", tostring(getgenv().TradeMainAccount))
-					return clickButton(trade)
-				end
-
-				-- accept every pending trade request
-				local function acceptPending()
-					local playerGui = localPlayer:FindFirstChild("PlayerGui")
-					local menu = playerGui and playerGui:FindFirstChild("TradeMenu")
-					menu = menu and menu:FindFirstChild("Main")
-					menu = menu and menu:FindFirstChild("Menu")
-					local pending = menu and menu:FindFirstChild("PendingTrades")
-					local list = pending and pending:FindFirstChild("List")
-					if not list then
-						return false
-					end
-					local any = false
-					for _, child in ipairs(list:GetChildren()) do
-						if child:IsA("ImageLabel") then
-							local accept = child:FindFirstChild("Accept")
-							if accept then
-								clickButton(accept)
-								any = true
-							end
-						end
-					end
-					return any
-				end
-
-				-- add up to `count` of one item through ReplicatedStorage.trade
-				local function addItem(name)
-					if not name or name == "" then
-						return 0
-					end
-					local have = inventoryCount(name)
-					if have <= 0 then
-						log("nothing to add - no '%s' in the inventory", tostring(name))
-						return 0
-					end
-					local count = have
-					if isMainAccount() then
-						count = math.min(tonumber(getgenv().TradeMainSendQty) or 1, have)
-					end
-					local trade = ReplicatedStorage:FindFirstChild("trade")
-					if not trade then
-						log("ReplicatedStorage.trade remote is missing")
-						return 0
-					end
-					local added = 0
-					for _ = 1, count do
-						if not getgenv().AutoTrade then
-							break
-						end
-						if not tradeGui() then
-							break
-						end
-						pcall(function()
-							trade:FireServer({ { addItem = name } })
-						end)
-						added += 1
-						getgenv().TradeItemsAdded = (getgenv().TradeItemsAdded or 0) + 1
-						task.wait(getgenv().TradeAddDelay or 0.5)
-					end
-					log("added %d x %s", added, tostring(name))
-					return added
-				end
-
-				-- adds the picked items to the trade window; returns how many
-				local function addItems(isMain)
-					local names = pickedNames(isMain)
-					if #names == 0 then
-						log("nothing is ticked for the %s to send", isMain and "MAIN" or "ALT")
-						return 0
-					end
-					local total = 0
-					for _, name in ipairs(names) do
-						if not (getgenv().AutoTrade and tradeGui()) then
-							break
-						end
-
-						total += addItem(name)
-					end
-					return total
-				end
-
-				-- accepts the trade window and waits for the other side
-				local function acceptAndWait()
-					local gui = tradeGui()
-					local main = gui and gui:FindFirstChild("Main")
-					if main then
-						local player = main:FindFirstChild("Player")
-						if player and player:IsA("ImageLabel") then
-							task.wait(1)
-							local buttons = main:FindFirstChild("Buttons")
-							local accept = buttons and buttons:FindFirstChild("Accept")
-							if accept then
-								log("accepting the trade window")
-								clickButton(accept)
-							end
-						end
-					end
-					local started = tick()
-					repeat
-						task.wait(0.2)
-					until not (tradeGui() and getgenv().AutoTrade and not (tick() - started > 120))
-				end
-
-				-- alt side
-				spawnLoop("TradeAlt", function(alive)
-					while alive() do
-						task.wait(1)
-						if not enabled() then
-							continue
-						end
-						if isMainAccount() then
-							continue
-						end
-						if stockFor(false) <= 0 then
-							continue
-						end
-						local started = tick()
-						local timeout = (getgenv().TradeTimeout or 1) * 60
-						if not requestTrade() then
-							continue
-						end
-						local gui
-						repeat
-							task.wait(1)
-							gui = tradeGui()
-						until not (not (gui or tick() - started > timeout) and getgenv().AutoTrade)
-						if not gui then
-							log(
-								"%s never opened a window within %ds - retrying",
-								tostring(getgenv().TradeMainAccount),
-								math.floor(timeout)
-							)
-						else
-							addItems(false)
-							acceptAndWait()
-							getgenv().TradesCompleted = (getgenv().TradesCompleted or 0) + 1
-							log(
-								"trade #%d done, %d left across %s",
-								getgenv().TradesCompleted,
-								stockFor(false),
-								table.concat(pickedNames(false), ", ")
-							)
-						end
-					end
-				end)
-
-				-- main side
-				spawnLoop("TradeMain", function(alive)
-					while alive() do
-						task.wait(1)
-						if not enabled() then
-							continue
-						end
-						if not isMainAccount() then
-							continue
-						end
-
-						acceptPending()
-						task.wait(1)
-						if tradeGui() then
-							addItems(true)
-							acceptAndWait()
-							getgenv().TradesCompleted = (getgenv().TradesCompleted or 0) + 1
-							log("trade #%d done", getgenv().TradesCompleted)
-						end
-					end
-				end)
-			end
+            -- Auto-trade workers removed.
 
 			-- auto craft bait (Fishing tab, "Craft Bait")
 			--   loop, craft one bait (CraftingRemote:InvokeServer), batch, amounts, selected baits
