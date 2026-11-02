@@ -13,7 +13,7 @@ end
 -- Compatibility aliases used by the recovered feature code.
 env.__TensenWF = writefile
 env.__TensenGC = getgc
-env.__YanusBuild = "quest-select-v4"
+env.__YanusBuild = "noah-approach-v5"
 
 env.__TensenAutoQuest = (function()
 -- Quest-only controller. Idle until explicitly enabled; never auto-loaded from config.
@@ -219,7 +219,10 @@ function Q.Step()
         Q.Status = "pausing NPC movement to collect the quest"
         return -- Give the existing NPC loop one tick to release its movement.
     end
-    if (part.Position - root.Position).Magnitude > 8 then
+    local prompt = noah:FindFirstChildWhichIsA("ProximityPrompt", true)
+    local interactionRange = math.max(1.5, math.min(6, (prompt and prompt.MaxActivationDistance or 8) - 0.75))
+    local verticalGap = math.abs(root.Position.Y - part.Position.Y)
+    if (part.Position - root.Position).Magnitude > interactionRange or verticalGap > 1.5 then
         Q.Status = "returning to Noah"
         travelStarted = travelStarted or tick()
         if tick() - travelStarted > 30 then Q.Fail("Could not reach Noah within 30 seconds"); return end
@@ -228,8 +231,16 @@ function Q.Step()
             local move = g.TweenToMob2 or (g.__F2Tween and g.__F2Tween.TweenToMob2)
             if type(move) ~= "function" then Q.Fail("The NPC movement helper is not ready"); return end
             travelRequested = true
-            move({MobName = noah.Name, Container = noah.Parent, BossKey = "NPC",
-                Offset = Vector3.new(0, 0, -5), Speed = math.clamp(tonumber(g.TweenSpeedMaster) or 40, 5, 60),
+            -- Quest interaction uses Noah's facing, not a world-space combat offset.
+            local look = part.CFrame.LookVector
+            local flat = Vector3.new(look.X, 0, look.Z)
+            local forward = flat.Magnitude > 0.001 and flat.Unit or Vector3.new(0, 0, 1)
+            local standDistance = math.min(3, interactionRange - 0.25)
+            move({MobName = noah.Name, Container = noah.Parent,
+                Offset = forward * standDistance, BehindDistance = 0,
+                -- No BossKey: NPC hover/shuffle settings must not affect a quest giver.
+                Raycast = false, TeleportOnClose = false, StopDistance = 0.5,
+                Speed = math.clamp(tonumber(g.TweenSpeedMaster) or 20, 8, 24),
                 WalkOnWater = false, MaxTime = 15})
         end
         return
