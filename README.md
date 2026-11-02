@@ -24,3 +24,11 @@ Noah, Desert Bandit, the active quest title/progress paths and Dialogue root wer
 Quest-giver travel no longer supplies BossKey=NPC. That key allowed NPCOffsetY and NPCShuffle to override the intended quest interaction point. The target now lies up to three studs in front of Noah using his facing direction, at his root height. Quest travel disables combat shuffle/behind offsets, obstacle-climb steering and close-range snapping. Interaction requires both prompt-range proximity and a small vertical gap, then stops and removes the movement forces. Combat travel remains unchanged.
 
 The actual controller passes regression tests for a rotated Noah, zero vertical offset, no combat key, disabled climb/snap, capped approach speed and descending before interaction. The complete build compiles. GPO behavior still requires user testing.
+
+## Noah dialogue update
+
+The user confirmed that approach, combat after manually accepting, and returning after completion work. Automatic dialogue choice selection remained stuck on the opening question. The updated controller first dispatches handlers for one supported button event, avoiding duplicate event-type dispatch. If a handler is unavailable or a choice remains unchanged, it falls back to a rendered screen click with the ScreenGui inset considered. Label-only choices are also supported. Status shows the chosen dialogue option and input method.
+
+A simulated flow using the actual controller advances How can I help? -> Alright! -> visible active quest and releases movement ownership. Fallback coordinate tests cover GUI inset and label-only choices. Full compilation passes. Actual GPO dialogue input still needs user verification.
+
+Roblox coordinate reference: https://create.roblox.com/docs/reference/engine/classes/GuiBase2d
