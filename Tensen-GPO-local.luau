@@ -24981,10 +24981,14 @@ Private server travel needs teleport queue support]],
 
 			Farm:AddToggle({
 				Name = "Auto Farm",
-				Description = "Quest and kill the mobs for your level",
+				Description = "Recovered routes: First Sea Fishman quest (190+), or Second Sea wolves. Early-level quests are missing.",
 				Default = getgenv().autofarm or false,
 				Flag = "AutoFarmToggle",
-				Callback = saveTo("autofarm"),
+                Callback = function(enabled)
+                    if enabled then getgenv().FarmLastError = nil end
+                    getgenv().autofarm = enabled
+                    autosave()
+                end,
 			})
 
 			addStatus(Farm, "Scroll")
@@ -34659,6 +34663,9 @@ Private server travel needs teleport queue support]],
                     getgenv().ForceNoClipReal = false
                     warn("[Tensen Auto Farm] " .. reason)
                     local ui = getgenv().TensenUILib
+                    if ui and type(ui.SetFlag) == "function" then
+                        pcall(function() ui:SetFlag("AutoFarmToggle", false) end)
+                    end
                     if ui and type(ui.Notify) == "function" then
                         pcall(function()
                             ui:Notify({ Title = "Auto Farm stopped", Content = reason, Duration = 10 })
@@ -34895,6 +34902,13 @@ Private server travel needs teleport queue support]],
 						if not myLevel then
 							continue
 						end
+
+                        -- The recovery contains no early-level First Sea quest selection.
+                        -- 190 is the threshold used by its existing Becky quest branch.
+                        if game.PlaceId == FIRST_SEA and myLevel < 190 then
+                            pauseFarm("First Sea Auto Farm only has a recovered Fishman quest route (190+); Sandora and other early-level quests are missing")
+                            continue
+                        end
 
 						local hasHaki = call("hasBusoHaki")
 						local onYetiQuest = call("IsOnYetiQuest")
