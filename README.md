@@ -1,40 +1,39 @@
-# yanus hub: quest selector
+# yanus hub
 
-Rejoin and run the normal loader from loader.luau. Keep Auto Load off while testing. In the Auto Farm tab, choose Quest, then enable Auto Farm. The new controls are not saved in configs and start off each session.
+Build: compact-profiles-v8. Rejoin before testing this update; running a second copy in the same session can leave old workers alive.
+
+## Load
+
+```lua
+loadstring(game:HttpGet("https://raw.githubusercontent.com/simon-1234562/script/main/Tensen-GPO-local.luau"))()
+```
+
+Open **Farm → Quest**, choose a quest, then enable **Auto Farm**. Noah is the default and was confirmed working by the user before this update. The controller accepts a kill quest, selects its enemy, farms with the existing NPC/M1 settings, and returns for renewal. Changing quest settings stops the running quest farm. Keep other movement/farming modes off while using it.
 
 ## Quest choices
 
-- Sandora - Desert Bandits (Noah): repeats Noah's quest automatically. Minimum level 10; no upper-level limit. Level 20 and higher can continue this quest. Selects Desert Bandit and uses the existing NPC/M1 settings.
-- Use current quest (accept manually): accept a kill quest in game, then enable Auto Farm. It matches the target NPC from Quest/Main/Info/Top/Progress, including simple plural names such as Marine(s). Available in First and Second Sea. NPCs must be loaded nearby. When the quest ends, movement and M1 pause while you manually accept another quest; then it resumes. Automatic acceptance/renewal for these other quests is not implemented.
+- **Sandora - Desert Bandits (Noah):** level 10+, with no upper cutoff.
+- **Recommended nearby quest (test):** reads level and chooses the highest eligible non-boss profile with its giver loaded within 1,500 studs. It can change profiles between quests. It does not sail or travel between islands.
+- **Named profiles (test):** Daph, Ronny, Tyrone, Robert, Kevin and Gozen. These use the shared positive dialogue button and must still be verified in game. See [QUEST-PROFILES.md](QUEST-PROFILES.md).
+- **Use current quest (accept manually):** farms a nearby kill quest already accepted in game. At completion it pauses until another quest is accepted. Works in both seas; an exact enemy override is optional.
+- **Custom quest giver and enemy (test):** supply exact loaded NPC giver and enemy names. Uses the same interaction and quest-confirmation checks; it is intended for kill quests, not deliveries, purchases or collection tasks.
 
-If matching fails, enter the exact internal NPC name in Quest enemy (optional). This overrides automatic enemy matching in current-quest mode. Changing the mode or override stops the running farm. Delivery and collection quests are not supported by NPC combat farming.
+A displayed recommendation is not proof of a route's live compatibility. If a giver, required level, prompt, dialogue or active quest cannot be confirmed, the controller stops instead of farming an unrelated target. Purchase-labelled dialogue choices are rejected. Only Noah has user-confirmed in-game quest cycling; the other profiles have isolated simulated coverage.
 
-Stopping Auto Farm or Tween To NPC stops the NPC driver and releases its holding forces. STOP NPC MOVEMENT is also available. release-movement.luau is a separate recovery for an old stuck session. Repeated identical failure notifications are suppressed for 15 seconds; the status remains visible.
+## Compact interface
 
-Recovered Quest Routes (Advanced) and the other original farming features remain. Keep conflicting farm/travel modes off when using the main Auto Farm control. Full simplified navigation and removal of unrelated PvP/trade controls remain pending. See REMOVALS.md for the existing cleanup inventory.
+- **Farm:** one main quest Auto Farm control, quest selection, status and emergency stop.
+- **Other farms:** existing combat settings, manual NPC/legacy routes, bosses, stats, fishing, selling fish, bait, fruit storage and merchant controls.
+- **Travel:** teleport/tween, private server and island ESP.
+- **QoL:** movement and protection controls.
+- **Settings:** performance/options and manual configuration loading. Configurations no longer load automatically at startup.
 
-## Validation and limits
+**Hide**, the floating **yanus** button, and **RightShift** toggle the window. The startup splash, music, avatar/profile panel, FPS graph and UI animation effects are removed. UI notifications are capped at three. See [REMOVALS.md](REMOVALS.md) for the complete removal and restoration inventory.
 
-Full build compiles with official Luau 0.745. Isolated tests of the actual controller cover levels 9, 14, 20 and 500; current quest target matching; manual renewal pause/resume; mode switching; missing helpers; hidden quest panels; notification suppression; timeout and stop behavior. Tests of actual movement cleanup and toggle hit areas pass. All 153 original literal feature flags remain. No GPO execution was used for validation, so in-game quest acceptance and completion still require user testing.
+Auto Farm starts off. Stop Auto Farm or use **STOP NPC MOVEMENT** to release movement. Turning off the manual NPC tween also stops the quest driver. A separate [release-movement.luau](release-movement.luau) is available for a stuck older session.
 
-Noah, Desert Bandit, the active quest title/progress paths and Dialogue root were confirmed by supplied live diagnostic reports. Other automatic quest dialogue routes are not implemented. Original attribution remains in source. Destructive anti-tamper, UI presence/admin reporting, the loading splash and music player were removed. Executor-based automation has no ban-free guarantee.
+## Validation and fallback
 
-## Noah approach correction
+The complete build compiles with official Luau 0.745. Isolated tests exercise the actual quest controller, movement cleanup, toggle hit areas, quest diagnostic and compact UI. Navigation mounts in First Sea, Second Sea and Battle Royale mocks. The compact UI creates no render-frame listener, sound or FPS image. These checks do not measure live FPS or establish live compatibility of new routes. See [VALIDATION.txt](VALIDATION.txt).
 
-Quest-giver travel no longer supplies BossKey=NPC. That key allowed NPCOffsetY and NPCShuffle to override the intended quest interaction point. The target now lies up to three studs in front of Noah using his facing direction, at his root height. Quest travel disables combat shuffle/behind offsets, obstacle-climb steering and close-range snapping. Interaction requires both prompt-range proximity and a small vertical gap, then stops and removes the movement forces. Combat travel remains unchanged.
-
-The actual controller passes regression tests for a rotated Noah, zero vertical offset, no combat key, disabled climb/snap, capped approach speed and descending before interaction. The complete build compiles. GPO behavior still requires user testing.
-
-## Noah dialogue update
-
-The user confirmed that approach, combat after manually accepting, and returning after completion work. Automatic dialogue choice selection remained stuck on the opening question. The updated controller first dispatches handlers for one supported button event, avoiding duplicate event-type dispatch. If a handler is unavailable or a choice remains unchanged, it falls back to a rendered screen click with the ScreenGui inset considered. Label-only choices are also supported. Status shows the chosen dialogue option and input method.
-
-A simulated flow using the actual controller advances How can I help? -> Alright! -> visible active quest and releases movement ownership. Fallback coordinate tests cover GUI inset and label-only choices. Full compilation passes. Actual GPO dialogue input still needs user verification.
-
-Roblox coordinate reference: https://create.roblox.com/docs/reference/engine/classes/GuiBase2d
-
-## Live NPCCHAT correction
-
-A subsequent live report identified the actual opening choice as NPCCHAT/Frame/go, a visible TextButton with MouseButton1Click and Activated listeners. The separate Dialogue screen is disabled. The prior controller searched only Dialogue, so its click helper never received Noah's choice. The choice finder now prioritizes visible NPCCHAT and retains Dialogue only as a fallback for other layouts. An already-open NPCCHAT conversation is not reopened while choices are appearing.
-
-The exact live hierarchy is covered by a regression: disabled Dialogue plus NPCCHAT/Frame/go advances both opening choices and confirms the quest. Compilation and all prior controller tests pass. In-game verification of this correction is pending. Build: npcchat-dialogue-v7.
+[Known working Noah loader](loader-dialogue-v7.luau) pins the version the user confirmed working, before this UI/profile update. It is available for comparison and rollback. Existing config folder names and internal Tensen aliases remain for compatibility; original source attribution remains. No hardcoded author webhooks or outsider shutdown code from the additional references was imported. Executor automation cannot be guaranteed ban-free.
