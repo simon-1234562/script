@@ -1,6 +1,6 @@
 # yanus hub
 
-Build: compact-profiles-v8. Rejoin before testing this update; running a second copy in the same session can leave old workers alive.
+Build: ground-paths-v9. Rejoin before testing this update; running a second copy in the same session can leave old workers alive.
 
 ## Load
 
@@ -37,3 +37,11 @@ Auto Farm starts off. Stop Auto Farm or use **STOP NPC MOVEMENT** to release mov
 The complete build compiles with official Luau 0.745. Isolated tests exercise the actual quest controller, movement cleanup, toggle hit areas, quest diagnostic and compact UI. Navigation mounts in First Sea, Second Sea and Battle Royale mocks. The compact UI creates no render-frame listener, sound or FPS image. These checks do not measure live FPS or establish live compatibility of new routes. See [VALIDATION.txt](VALIDATION.txt).
 
 [Known working Noah loader](loader-dialogue-v7.luau) pins the version the user confirmed working, before this UI/profile update. It is available for comparison and rollback. Existing config folder names and internal Tensen aliases remain for compatibility; original source attribution remains. No hardcoded author webhooks or outsider shutdown code from the additional references was imported. Executor automation cannot be guaranteed ban-free.
+
+## Ground movement update
+
+Quest travel and the manual NPC control now use PathfindingService waypoints and Humanoid walking around obstacles. The manual control is named **Walk To NPC**, keeping its existing config flag for compatibility. These paths do not change collisions, write root CFrames or create hover movers. The old NPC height/shuffle settings do not affect this walking mode. Fast Walk is paused during navigation, and fabricated movement-signal sends are skipped while a route is running. Noclip must be off.
+
+Blocked paths are recalculated. Missing floor, unavailable paths, ten seconds without movement or prolonged airborne state stops the route with a status message; there is no straight-line teleport fallback. The giver return limit is 120 seconds to allow walking. This update does not replace the independent advanced boss, legacy quest or island tween engines. The ground changes compile and pass simulated route tests but still need live verification.
+
+Implementation references: [Roblox pathfinding](https://create.roblox.com/docs/characters/pathfinding) and [Humanoid movement](https://create.roblox.com/docs/reference/engine/classes/Humanoid).
