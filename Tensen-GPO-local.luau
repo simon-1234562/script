@@ -16,7 +16,7 @@ env.__TensenGC = getgc
 env.AutoTrade, env.TweenToPlayer, env.AutoLoad = false, false, false
 env.ESP = env.ESP or {}
 env.ESP.Players, env.ESP.AnimatedBorder, env.ESP.Pulse, env.ESP.Rainbow = false, false, false, false
-env.__YanusBuild = "island-ground-v10"
+env.__YanusBuild = "dialogue-any-position-v11"
 
 env.__YanusGround = (function()
 -- Ordinary Humanoid walking; no collision changes, hover, or position writes.
@@ -221,7 +221,7 @@ function Q.Set(enabled)
     Q.Enabled = enabled == true
     Q.Status = Q.Enabled and "checking level and quest" or "off"
     if not Q.Enabled then return end
-    if not g.__YanusGround or type(g.__YanusGround.Go) ~= "function" or type(g.Level) ~= "function" then
+    if type(g.TweenToMob2) ~= "function" or type(g.Level) ~= "function" then
         Q.Fail("Full hub is not ready. Run the normal hub loader, wait for it to finish, then enable Auto Farm")
         return
     end
@@ -357,17 +357,54 @@ local function questState()
     if Q.Mode==Q.Modes[2]or(Q.ActiveProfile and Q.Matches(Q.ActiveProfile,data))then return "active",data.progress end
     return "other",data.progress
 end
-local function choice(gui, expected)
-    -- Noah's live dialogue uses NPCCHAT; Dialogue is a different, disabled UI.
-    local dialogue = gui:FindFirstChild("NPCCHAT")
-    if not dialogue or not visible(dialogue, gui) then dialogue = gui:FindFirstChild("Dialogue") end
-    for _, item in ipairs(dialogue and dialogue:GetDescendants() or {}) do
-        if (item:IsA("TextButton") or item:IsA("TextLabel")) and normalize(item.Text) == expected and visible(item, gui) then
-            local button = item:IsA("GuiButton") and item or item:FindFirstAncestorWhichIsA("GuiButton")
-            button = button or item -- some dialogue choices use a label inside an input frame
-            if button and visible(button, gui) and button.AbsoluteSize.X > 0 and button.AbsoluteSize.Y > 0 then return button end
+-- Select by visible meaning and button hierarchy, never left/middle/right position.
+local function choiceText(item)
+    local text=""
+    pcall(function()text=item.ContentText or item.Text or ""end)
+    if text==""then pcall(function()text=item.Text or ""end)end
+    if text==""then
+        for _,child in ipairs(item:GetDescendants())do
+            if child:IsA("TextLabel")and visible(child,item)then
+                pcall(function()text=child.ContentText or child.Text or ""end)
+                if text~=""then break end
+            end
         end
     end
+    return tostring(text)
+end
+function Q.FindChoice(gui)
+    local chat=gui:FindFirstChild("NPCCHAT")
+    if not chat or not visible(chat,gui)then chat=gui:FindFirstChild("Dialogue")end
+    if not chat or not visible(chat,gui)then return nil end
+    local best,bestText,bestScore=nil,nil,-1
+    local purchase=false
+    local positives={howcanihelp=100,alright=100,accept=100,acceptquest=100,yes=90,sure=90,okay=90,ok=90,
+        continue=80,next=80,understood=80,letsdoit=90}
+    for _,item in ipairs(chat:GetDescendants())do
+        if (item:IsA("GuiButton")or item:IsA("TextLabel"))and visible(item,gui)then
+            local text=choiceText(item)
+            local key=normalize(text)
+            local label=text:match("^%s*(.-)%s*$")
+            local dots=label=="..."or label=="…"
+            local button=item:IsA("GuiButton")and item or item:FindFirstAncestorWhichIsA("GuiButton")
+            local score=positives[key]or(dots and 70)or 0
+            local denied=key=="bye"or key=="no"or key=="leave"or key=="close"or key=="cancel"
+                or key:find("sorry",1,true)or key:find("notready",1,true)or key:find("decline",1,true)
+            local buying=key:find("robux",1,true)or key:find("purchase",1,true)or key:find("pay",1,true)or key:find("buy",1,true)
+            if buying then purchase=true end
+            -- Some old layouts expose the positive choice as an input-frame label.
+            if not button and score>0 and not dots then button=item end
+            if button and not denied and not buying and visible(button,gui)then
+                if normalize(button.Name)=="go"then score=math.max(score,60)end
+                if score>0 and button.AbsoluteSize.X>0 and button.AbsoluteSize.Y>0 then
+                    if normalize(button.Name)=="go"then score+=1 end
+                    if score>bestScore then best,bestText,bestScore=button,text,score end
+                end
+            end
+        end
+    end
+    if best then return best,bestText end
+    if purchase then return nil,nil,"The dialogue is offering a purchase rather than a recognized quest choice"end
 end
 function Q.ClickChoice(button, label)
     if button ~= lastChoiceButton or label ~= lastChoiceText then
@@ -474,13 +511,23 @@ function Q.Step()
         Q.Status = "returning to " .. profile.giver
         travelStarted = travelStarted or tick()
         if tick() - travelStarted > 120 then Q.Fail("Could not reach " .. profile.giver .. " within 120 seconds"); return end
-        travelRequested = true
-        local look = part.CFrame.LookVector
-        local flat = Vector3.new(look.X, 0, look.Z)
-        local forward = flat.Magnitude > 0.001 and flat.Unit or Vector3.new(0, 0, 1)
-        local standDistance = math.min(3, interactionRange - 0.25)
-        g.__YanusGround.Go(part, "quest", 1, forward * standDistance)
-        if Q.Enabled then Q.Status = "returning to " .. profile.giver .. " - " .. g.__YanusGround.Status end
+        local state = g.__TensenTweenState
+        if not state or not state.Enabled then
+            local move = g.TweenToMob2 or (g.__F2Tween and g.__F2Tween.TweenToMob2)
+            if type(move) ~= "function" then Q.Fail("The NPC movement helper is not ready"); return end
+            travelRequested = true
+            -- Quest interaction uses Noah's facing, not a world-space combat offset.
+            local look = part.CFrame.LookVector
+            local flat = Vector3.new(look.X, 0, look.Z)
+            local forward = flat.Magnitude > 0.001 and flat.Unit or Vector3.new(0, 0, 1)
+            local standDistance = math.min(3, interactionRange - 0.25)
+            move({MobName = noah.Name, Container = noah.Parent,
+                Offset = forward * standDistance, BehindDistance = 0,
+                -- No BossKey: NPC hover/shuffle settings must not affect a quest giver.
+                Raycast = false, TeleportOnClose = false, StopDistance = 0.5,
+                Speed = math.clamp(tonumber(g.TweenSpeedMaster) or 20, 8, 24),
+                WalkOnWater = false, MaxTime = 15})
+        end
         return
     end
     stopOwnTravel()
@@ -489,25 +536,8 @@ function Q.Step()
     if tick() - started > 25 then Q.Fail("Quest was not confirmed; accept it manually and send the last Auto Farm status"); return end
     if tick() - lastInput < 1.5 then return end
     lastInput = tick()
-    local button,label
-    local chat=gui:FindFirstChild("NPCCHAT")
-    local frame=chat and chat:FindFirstChild("Frame")
-    local primary=frame and frame:FindFirstChild("go")
-    if primary and primary:IsA("GuiButton")and visible(primary,gui)then
-        button=primary;label="Continue"
-        pcall(function()
-            local content=primary.ContentText
-            if type(content)=="string"and content~=""then label=content
-            elseif type(primary.Text)=="string"then label=primary.Text end
-        end)
-        local decision=normalize(label)
-        if decision:find("robux",1,true)or decision:find("purchase",1,true)or decision:find("pay",1,true)or decision:find("buy",1,true)then
-            Q.Fail("The dialogue is offering a purchase rather than a recognized quest choice");return
-        end
-    else
-        button,label=choice(gui,"alright"),"Alright!"
-        if not button then button,label=choice(gui,"howcanihelp"),"How can I help?"end
-    end
+    local button,label,choiceError=Q.FindChoice(gui)
+    if choiceError then Q.Fail(choiceError);return end
     if button then
         local method = Q.ClickChoice(button, label)
         Q.Status = profile.giver .. " - selected " .. label .. " (" .. method .. ")"
@@ -23863,8 +23893,8 @@ Private server travel needs teleport queue support]],
 			end
 
 			Farm:AddToggle({
-				Name = "Walk To NPC",
-				Description = "Walk around obstacles to the selected NPC. Uses ground paths instead of hovering.",
+				Name = "Tween To NPC",
+				Description = "Tween to the selected NPC. Combat height is capped at 6 studs; island ocean flight stays disabled.",
 				Default = false,
 				Flag = "TweenToNPCToggle",
 				Callback = function(tweenToNpc)
@@ -23910,7 +23940,7 @@ Private server travel needs teleport queue support]],
 
 			Farm:AddSlider({
 				Name = "NPC Offset",
-				Description = "Legacy advanced tween height; ignored by Walk To NPC and quest farming.",
+				Description = "NPC combat height. This tween caps the value at 6 studs.",
 				Min = 0,
 				Max = 25,
 				Suffix = " studs",
@@ -35884,10 +35914,16 @@ Private server travel needs teleport queue support]],
 						if getgenv().NPCAutoEquip ~= false then
 							pcall(getgenv().equipFarmWeapon)
 						end
-                        local target = getgenv().findNearestAlive(getgenv().SelectedNPC)
-                        local part = target and (target:FindFirstChild("HumanoidRootPart") or target.PrimaryPart)
-                        if part then getgenv().__YanusGround.Go(part, "npc", 4)
-                        else getgenv().__YanusGround.Stop("npc") end
+                        if not tweenState().Enabled and getgenv().findNearestAlive(getgenv().SelectedNPC) then
+                            getgenv().__YanusGround.Stop("npc")
+                            getgenv().TweenToMob2({
+                                MobName=getgenv().SelectedNPC,
+                                Speed=math.clamp(tonumber(getgenv().TweenSpeedMaster)or 30,8,40),
+                                Offset=Vector3.new(0,math.clamp(tonumber(getgenv().NPCOffsetY)or 4,0,6),0),
+                                BehindDistance=2,Raycast=true,TeleportOnClose=false,
+                                Container=workspace:FindFirstChild("NPCs")or workspace,
+                            })
+                        end
 					end)
 				end
 
