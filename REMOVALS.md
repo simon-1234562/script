@@ -29,3 +29,7 @@ Removed flags: TradeMainAccountInput, TradeItemAltDropdown, TradeItemMainDropdow
 ## Restoration
 
 Use the pinned checkpoint to restore individual removed controls together with their workers and dependencies. Restoring an entire checkpoint also restores its older interface. Do not combine a restored movement or trade worker with a second live copy. Restart Roblox between versions. Hardcoded author reporting and outsider shutdown from the extra reference sources were never imported; see ADDITIONAL-SOURCE-REVIEW.md.
+
+## Ground movement change (v9)
+
+The manual NPC driver and main quest-giver approach no longer call the legacy tween engine. They use a shared ground path walker. The existing TweenToNPCToggle config flag is retained under the visible name Walk To NPC. NPC hover/height and shuffle controls remain for compatibility with legacy code but are ignored by this walker. Independent advanced farm and island-travel tweens are retained. The pre-walking build is [commit e55a1abb](https://github.com/simon-1234562/script/blob/e55a1abbf41c674f9ee2c2cd29b823f8bd80f289/Tensen-GPO-local.luau).
