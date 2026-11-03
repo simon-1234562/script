@@ -14,3 +14,9 @@ PASS: Literal-flag audit: only the documented 20 removals; 3 profile fields adde
 PASS: Known working v7 checkpoint Git blob matches published 51de1b10e6ad971df858bee59bd3068ad147e120.
 
 Live evidence: the user confirmed Noah acceptance/farming/return works in v7. This new compact UI and additional profiles have NOT been run in Roblox. Tests use mocks; they do not measure FPS, memory, executor compatibility, server behavior or ban risk. Inherited advanced farming modes have not been independently validated. No reference hub was executed wholesale.
+
+Ground-paths-v9 update:
+PASS: complete source compilation and updated actual quest-controller regressions.
+PASS: actual ground navigator follows waypoints around an obstacle, performs a waypoint jump, restores Fast Walk pause, stops when floor/path is missing, replans blocked routes, detects stalled/airborne movement, prevents stale movement after cancellation during ComputeAsync, respects route ownership, stops on respawn and rejects noclip.
+PASS: actual NPC worker dispatches ground navigation and stops/pauses on missing targets, disabled toggle and quest interaction. It never calls the legacy tween.
+Live validation remains pending. The floor-distance kick text was not supplied, so its exact cause is not established.
