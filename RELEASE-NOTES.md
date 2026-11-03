@@ -1,7 +1,5 @@
-# dialogue-any-position-v11
+# npc-hover-reset-v12
 
-NPC combat and quest-giver approach use tween movement again at the user's request. NPC combat height is capped at six studs, speed at 40; no close teleport is requested. The giver approach retains its front offset at root height and capped approach speed. Island ocean flight remains disabled.
+NPC combat now approaches directly above the target: nine-stud default, zero behind offset, one-stud arrival tolerance, and full 3D steering. The v11 raycast mode used horizontal steering and could stop beside the enemy without gaining height. NPC Offset controls the height from 0 to 25 studs; the v11 six-stud cap is removed. Speed remains capped at 40 and close teleport stays off.
 
-The quest helper scans visible NPCCHAT/Dialogue choices by label and hierarchy, rather than requiring NPCCHAT/Frame/go or a left-hand button. It recognizes centered ellipsis, Continue/Next and common positive acceptance labels, including nested labels. Hidden, decline and purchase-labelled choices are excluded. Click fallback uses the chosen button's current position. It still confirms the matching quest before combat. Unknown dialogue wording may require a diagnostic.
-
-Compilation and actual-controller simulated tests pass, including Kevin-style center/repositioned choices, Unicode ellipsis, nested labels, decline/purchase exclusions, NPC tween dispatch and existing dialogue/stop regressions. Live verification remains pending; movement compatibility is not guaranteed.
+Quest-giver positioning, dialogue choice selection and the island ocean-flight restriction are unchanged. Compilation and actual-driver/steering simulations pass. Live verification remains pending.
