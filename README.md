@@ -49,3 +49,9 @@ Implementation references: [Roblox pathfinding](https://create.roblox.com/docs/c
 ## Island travel update (v10)
 
 Tween To Island is replaced by **Walk To Island (land only)**, retaining StartTweenIslandToggle for config compatibility. The worker no longer calls TweenToCFrame. Destinations beyond 512 studs are rejected with Boat travel required; closer destinations use the ground walker, which rejects unavailable land paths. Shell's Town to Town of Beginnings requires manual boat travel. Automatic boat navigation is not implemented. Other independent legacy teleport/boss features are not changed by this patch.
+
+## Latest behavior (v11; supersedes the v9 NPC walking notes)
+
+Auto Farm and the manual **Tween To NPC** control use NPC tweening again. Combat height is capped at six studs and speed at 40; the giver approach uses its front offset at root height. The island control remains nearby ground walking only, with boats required for ocean trips.
+
+Dialogue selection searches visible choices by meaning, wherever they appear. Centered “…”/“…” continuation, Continue, Next and common accept labels work without relying on the left button or the name go. The matching active quest must still be confirmed. Unknown text may require a diagnostic; purchases and decline choices are skipped.
