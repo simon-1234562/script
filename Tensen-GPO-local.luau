@@ -16,7 +16,7 @@ env.__TensenGC = getgc
 env.AutoTrade, env.TweenToPlayer, env.AutoLoad = false, false, false
 env.ESP = env.ESP or {}
 env.ESP.Players, env.ESP.AnimatedBorder, env.ESP.Pulse, env.ESP.Rainbow = false, false, false, false
-env.__YanusBuild = "dialogue-any-position-v11"
+env.__YanusBuild = "npc-hover-reset-v12"
 
 env.__YanusGround = (function()
 -- Ordinary Humanoid walking; no collision changes, hover, or position writes.
@@ -23894,7 +23894,7 @@ Private server travel needs teleport queue support]],
 
 			Farm:AddToggle({
 				Name = "Tween To NPC",
-				Description = "Tween to the selected NPC. Combat height is capped at 6 studs; island ocean flight stays disabled.",
+				Description = "Tween directly above the selected NPC. Adjust the NPC Offset below.",
 				Default = false,
 				Flag = "TweenToNPCToggle",
 				Callback = function(tweenToNpc)
@@ -23940,7 +23940,7 @@ Private server travel needs teleport queue support]],
 
 			Farm:AddSlider({
 				Name = "NPC Offset",
-				Description = "NPC combat height. This tween caps the value at 6 studs.",
+				Description = "Height above the NPC. Default: 9 studs.",
 				Min = 0,
 				Max = 25,
 				Suffix = " studs",
@@ -35919,8 +35919,8 @@ Private server travel needs teleport queue support]],
                             getgenv().TweenToMob2({
                                 MobName=getgenv().SelectedNPC,
                                 Speed=math.clamp(tonumber(getgenv().TweenSpeedMaster)or 30,8,40),
-                                Offset=Vector3.new(0,math.clamp(tonumber(getgenv().NPCOffsetY)or 4,0,6),0),
-                                BehindDistance=2,Raycast=true,TeleportOnClose=false,
+                                Offset=Vector3.new(0,math.clamp(tonumber(getgenv().NPCOffsetY)or 9,0,25),0),
+                                BehindDistance=0,StopDistance=1,Raycast=false,TeleportOnClose=false,
                                 Container=workspace:FindFirstChild("NPCs")or workspace,
                             })
                         end
