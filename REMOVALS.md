@@ -33,3 +33,7 @@ Use the pinned checkpoint to restore individual removed controls together with t
 ## Ground movement change (v9)
 
 The manual NPC driver and main quest-giver approach no longer call the legacy tween engine. They use a shared ground path walker. The existing TweenToNPCToggle config flag is retained under the visible name Walk To NPC. NPC hover/height and shuffle controls remain for compatibility with legacy code but are ignored by this walker. Independent advanced farm and island-travel tweens are retained. The pre-walking build is [commit e55a1abb](https://github.com/simon-1234562/script/blob/e55a1abbf41c674f9ee2c2cd29b823f8bd80f289/Tensen-GPO-local.luau).
+
+## Island flight removal (v10)
+
+Removed the TweenToIsland worker's direct flight/close-teleport call. The visible control is now Walk To Island (land only), limited to nearby ground paths. Longer trips require a boat. StartTweenIslandToggle remains compatible. The previous worker can be found at commit 8e2afa40a3632cbb97417bfaa07f661ebbdd0331; restoring it restores ocean flight behavior.
