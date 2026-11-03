@@ -45,3 +45,7 @@ Quest travel and the manual NPC control now use PathfindingService waypoints and
 Blocked paths are recalculated. Missing floor, unavailable paths, ten seconds without movement or prolonged airborne state stops the route with a status message; there is no straight-line teleport fallback. The giver return limit is 120 seconds to allow walking. This update does not replace the independent advanced boss, legacy quest or island tween engines. The ground changes compile and pass simulated route tests but still need live verification.
 
 Implementation references: [Roblox pathfinding](https://create.roblox.com/docs/characters/pathfinding) and [Humanoid movement](https://create.roblox.com/docs/reference/engine/classes/Humanoid).
+
+## Island travel update (v10)
+
+Tween To Island is replaced by **Walk To Island (land only)**, retaining StartTweenIslandToggle for config compatibility. The worker no longer calls TweenToCFrame. Destinations beyond 512 studs are rejected with Boat travel required; closer destinations use the ground walker, which rejects unavailable land paths. Shell's Town to Town of Beginnings requires manual boat travel. Automatic boat navigation is not implemented. Other independent legacy teleport/boss features are not changed by this patch.
