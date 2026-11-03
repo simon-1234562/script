@@ -20,3 +20,5 @@ PASS: complete source compilation and updated actual quest-controller regression
 PASS: actual ground navigator follows waypoints around an obstacle, performs a waypoint jump, restores Fast Walk pause, stops when floor/path is missing, replans blocked routes, detects stalled/airborne movement, prevents stale movement after cancellation during ComputeAsync, respects route ownership, stops on respawn and rejects noclip.
 PASS: actual NPC worker dispatches ground navigation and stops/pauses on missing targets, disabled toggle and quest interaction. It never calls the legacy tween.
 Live validation remains pending. The floor-distance kick text was not supplied, so its exact cause is not established.
+
+Island-ground-v10: complete build compiles. Actual worker mock passes distant-route refusal with zero legacy tween calls, nearby ground dispatch, stop on toggle off, and toggle clearing on arrival. Ground navigator regressions pass, including island-only failure cleanup. No live boat automation or GPO travel test performed.
