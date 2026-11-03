@@ -37,3 +37,7 @@ The manual NPC driver and main quest-giver approach no longer call the legacy tw
 ## Island flight removal (v10)
 
 Removed the TweenToIsland worker's direct flight/close-teleport call. The visible control is now Walk To Island (land only), limited to nearby ground paths. Longer trips require a boat. StartTweenIslandToggle remains compatible. The previous worker can be found at commit 8e2afa40a3632cbb97417bfaa07f661ebbdd0331; restoring it restores ocean flight behavior.
+
+## NPC tween restoration (v11)
+
+At the user's request, NPC combat and giver approach use tween movement again. The visible manual control is Tween To NPC with its existing flag. Combat uses a six-stud height cap and a 40 speed cap, with no close teleport request; the giver front offset remains at root height. The island flight removal remains in effect. v9/v10 descriptions of ground-only NPC movement are historical.
