@@ -16,7 +16,130 @@ env.__TensenGC = getgc
 env.AutoTrade, env.TweenToPlayer, env.AutoLoad = false, false, false
 env.ESP = env.ESP or {}
 env.ESP.Players, env.ESP.AnimatedBorder, env.ESP.Pulse, env.ESP.Rainbow = false, false, false, false
-env.__YanusBuild = "compact-profiles-v8"
+env.__YanusBuild = "ground-paths-v9"
+
+env.__YanusGround = (function()
+-- Ordinary Humanoid walking; no collision changes, hover, or position writes.
+local g=getgenv()
+local N={Status="idle",Serial=0}
+local function parts()
+    local c=game:GetService("Players").LocalPlayer.Character
+    return c,c and c:FindFirstChild("HumanoidRootPart"),c and c:FindFirstChildOfClass("Humanoid")
+end
+local function flat(a,b)return Vector3.new(a.X-b.X,0,a.Z-b.Z).Magnitude end
+function N.Stop(owner)
+    local j=N.Current
+    if not j or(owner and j.owner~=owner)then return end
+    N.Serial+=1;N.Current=nil
+    if j.blocked then j.blocked:Disconnect()end
+    if j.path then j.path:Destroy()end
+    if j.hum.Parent then j.hum:Move(Vector3.zero)end
+    g.ForceDisableFastWalk=j.previousFastWalk
+    N.Status="idle"
+end
+local function fail(j,reason)
+    if N.Current~=j then return end
+    N.Stop();N.Status=reason
+    local q=g.__TensenAutoQuest
+    if q and q.Enabled then q.Fail(reason)
+    else
+        g.TweenToNPC=false
+        if g.TensenUILib then
+            pcall(function()g.TensenUILib:SetFlag("TweenToNPCToggle",false)end)
+            pcall(function()g.TensenUILib:Notify({Title="NPC walking stopped",Content=reason,Duration=6})end)
+        end
+        warn("[yanus walking] "..reason)
+    end
+end
+local function clearLine(a,b,character)
+    local p=RaycastParams.new();p.FilterType=Enum.RaycastFilterType.Exclude
+    p.FilterDescendantsInstances={character,workspace:FindFirstChild("NPCs")or character};p.RespectCanCollide=true
+    return workspace:Raycast(a,b-a,p)==nil
+end
+local function floorPoint(position,character)
+    local p=RaycastParams.new();p.FilterType=Enum.RaycastFilterType.Exclude
+    p.FilterDescendantsInstances={character,workspace:FindFirstChild("NPCs")or character};p.RespectCanCollide=true
+    local hit=workspace:Raycast(position+Vector3.new(0,4,0),Vector3.new(0,-20,0),p)
+    if not hit or hit.Material==Enum.Material.Water then return nil end
+    return hit.Position
+end
+function N.Go(part,owner,range,offset)
+    local character,root,hum=parts()
+    if not part or not part.Parent or not root or not hum or hum.Health<=0 then N.Stop(owner);return false end
+    if g.Noclip or g.ForceNoClipReal then
+        local q=g.__TensenAutoQuest
+        if q and q.Enabled then q.Fail("Turn off Noclip before using ground quest movement")end
+        N.Status="Turn off Noclip before using ground movement";return false
+    end
+    local goal=part.Position+(offset or Vector3.zero)
+    if flat(root.Position,goal)<=range and math.abs(root.Position.Y-goal.Y)<=4 and clearLine(root.Position,goal,character) then
+        N.Stop(owner);N.Status="in range";return true
+    end
+    local current=N.Current
+    if current and current.owner==owner and current.target==part then return true end
+    N.Stop()
+    if type(g.StopCurrentTween)=="function"then g.StopCurrentTween()end
+    local j={owner=owner,target=part,range=range,offset=offset or Vector3.zero,hum=hum,previousFastWalk=g.ForceDisableFastWalk}
+    N.Current=j;N.Serial+=1;local serial=N.Serial
+    g.ForceDisableFastWalk=true;N.Status="finding a ground path"
+    task.spawn(function()
+        local ok,err=pcall(function()
+            local lastProgress,lastPosition=tick(),root.Position
+            local airSince,lastPlan,plannedGoal=nil,-math.huge,nil
+            local waypoints,index,replan=nil,1,true
+            while N.Current==j and N.Serial==serial do
+                if character~=game:GetService("Players").LocalPlayer.Character or hum.Health<=0 or not part.Parent then N.Stop(owner);return end
+                if g.Noclip or g.ForceNoClipReal then fail(j,"Turn off Noclip before using ground movement");return end
+                local destination=part.Position+j.offset
+                if flat(root.Position,destination)<=range and math.abs(root.Position.Y-destination.Y)<=4 and clearLine(root.Position,destination,character) then N.Stop(owner);N.Status="in range";return end
+                if(root.Position-lastPosition).Magnitude>=1 then lastProgress=tick();lastPosition=root.Position end
+                if tick()-lastProgress>10 then fail(j,"Ground route is blocked; move to an open path and retry");return end
+                if hum.FloorMaterial==Enum.Material.Air then
+                    airSince=airSince or tick()
+                    if tick()-airSince>4 then fail(j,"Ground movement stopped: character has been airborne too long");return end
+                    task.wait(0.15);continue
+                end
+                airSince=nil
+                if plannedGoal and flat(destination,plannedGoal)>6 then replan=true end
+                if replan and tick()-lastPlan>=1 then
+                    hum:Move(Vector3.zero)
+                    if j.blocked then j.blocked:Disconnect();j.blocked=nil end
+                    if j.path then j.path:Destroy();j.path=nil end
+                    local goalPoint=floorPoint(destination,character)
+                    if not goalPoint then fail(j,"No walkable floor near the target; move closer using a ground route");return end
+                    local path=game:GetService("PathfindingService"):CreatePath({AgentRadius=2,AgentHeight=6,
+                        AgentCanJump=true,AgentCanClimb=false,WaypointSpacing=4,Costs={Water=math.huge}})
+                    j.path=path
+                    local computed=pcall(function()path:ComputeAsync(root.Position,goalPoint)end)
+                    if N.Current~=j or N.Serial~=serial then return end
+                    if not computed or path.Status~=Enum.PathStatus.Success then fail(j,"No walkable path found; move around the rocks manually and retry");return end
+                    waypoints=path:GetWaypoints();index=1
+                    if #waypoints==0 then fail(j,"Pathfinding returned an empty route");return end
+                    j.blocked=path.Blocked:Connect(function(blockedIndex)if blockedIndex>=index then replan=true end end)
+                    plannedGoal=destination;lastPlan=tick();replan=false
+                end
+                if replan then hum:Move(Vector3.zero)
+                elseif waypoints then
+                    while index<=#waypoints and flat(root.Position,waypoints[index].Position)<(index<#waypoints and 1.75 or math.min(range,1))
+                        and math.abs(root.Position.Y-waypoints[index].Position.Y)<6 do index+=1 end
+                    local waypoint=waypoints[index]
+                    if not waypoint then replan=true
+                    else
+                        N.Status="walking around obstacles"
+                        if waypoint.Action==Enum.PathWaypointAction.Jump then hum.Jump=true end
+                        hum:MoveTo(waypoint.Position)
+                    end
+                end
+                task.wait(0.15)
+            end
+        end)
+        if not ok then fail(j,"Ground path error: "..tostring(err))end
+    end)
+    return true
+end
+return N
+
+end)()
 
 env.__TensenAutoQuest = (function()
 -- Quest-only controller. Idle until explicitly enabled; never auto-loaded from config.
@@ -67,6 +190,7 @@ local function visible(item, gui)
 end
 local function stopOwnTravel()
     if travelRequested and type(g.StopCurrentTween) == "function" then pcall(g.StopCurrentTween) end
+    if g.__YanusGround then g.__YanusGround.Stop("quest") end
     travelRequested, travelStarted = false, nil
 end
 local function release()
@@ -79,6 +203,7 @@ function Q.Set(enabled)
     generation += 1
     release()
     if priorNPCSettings then
+        if g.__YanusGround then g.__YanusGround.Stop() end
         if type(g.StopCurrentTween) == "function" then pcall(g.StopCurrentTween) end
         g.TweenToNPC = false -- stopping Auto Farm must stop its NPC driver
         g.SelectedNPC = priorNPCSettings.selected
@@ -88,7 +213,7 @@ function Q.Set(enabled)
     Q.Enabled = enabled == true
     Q.Status = Q.Enabled and "checking level and quest" or "off"
     if not Q.Enabled then return end
-    if type(g.TweenToMob2) ~= "function" or type(g.Level) ~= "function" then
+    if not g.__YanusGround or type(g.__YanusGround.Go) ~= "function" or type(g.Level) ~= "function" then
         Q.Fail("Full hub is not ready. Run the normal hub loader, wait for it to finish, then enable Auto Farm")
         return
     end
@@ -340,24 +465,14 @@ function Q.Step()
     if (part.Position - root.Position).Magnitude > interactionRange or verticalGap > 1.5 then
         Q.Status = "returning to " .. profile.giver
         travelStarted = travelStarted or tick()
-        if tick() - travelStarted > 30 then Q.Fail("Could not reach " .. profile.giver .. " within 30 seconds"); return end
-        local state = g.__TensenTweenState
-        if not state or not state.Enabled then
-            local move = g.TweenToMob2 or (g.__F2Tween and g.__F2Tween.TweenToMob2)
-            if type(move) ~= "function" then Q.Fail("The NPC movement helper is not ready"); return end
-            travelRequested = true
-            -- Quest interaction uses Noah's facing, not a world-space combat offset.
-            local look = part.CFrame.LookVector
-            local flat = Vector3.new(look.X, 0, look.Z)
-            local forward = flat.Magnitude > 0.001 and flat.Unit or Vector3.new(0, 0, 1)
-            local standDistance = math.min(3, interactionRange - 0.25)
-            move({MobName = noah.Name, Container = noah.Parent,
-                Offset = forward * standDistance, BehindDistance = 0,
-                -- No BossKey: NPC hover/shuffle settings must not affect a quest giver.
-                Raycast = false, TeleportOnClose = false, StopDistance = 0.5,
-                Speed = math.clamp(tonumber(g.TweenSpeedMaster) or 20, 8, 24),
-                WalkOnWater = false, MaxTime = 15})
-        end
+        if tick() - travelStarted > 120 then Q.Fail("Could not reach " .. profile.giver .. " within 120 seconds"); return end
+        travelRequested = true
+        local look = part.CFrame.LookVector
+        local flat = Vector3.new(look.X, 0, look.Z)
+        local forward = flat.Magnitude > 0.001 and flat.Unit or Vector3.new(0, 0, 1)
+        local standDistance = math.min(3, interactionRange - 0.25)
+        g.__YanusGround.Go(part, "quest", 1, forward * standDistance)
+        if Q.Enabled then Q.Status = "returning to " .. profile.giver .. " - " .. g.__YanusGround.Status end
         return
     end
     stopOwnTravel()
@@ -22552,6 +22667,7 @@ function Window:Destroy()
     local q=getgenv().__TensenAutoQuest;if q and q.Enabled then q.Set(false)end
     local i=table.find(Library._windows,self.ScreenGui);if i then table.remove(Library._windows,i)end
     i=table.find(Library._windowObjects,self);if i then table.remove(Library._windowObjects,i)end
+    if getgenv().__YanusGround then getgenv().__YanusGround.Stop() end
     self.ScreenGui:Destroy()
 end
 function Window:_selectTab(tab)
@@ -23561,6 +23677,7 @@ end)()
                     q.Set(false)
                     if q.Toggle then q.Toggle:Set(false) end
                     env.TweenToNPC = false
+                    if env.__YanusGround then env.__YanusGround.Stop() end
                     if env.TensenUILib then env.TensenUILib:SetFlag("TweenToNPCToggle", false) end
                     if type(env.StopCurrentTween) == "function" then env.StopCurrentTween() end
                 end,
@@ -23738,13 +23855,14 @@ Private server travel needs teleport queue support]],
 			end
 
 			Farm:AddToggle({
-				Name = "Tween To NPC",
-				Description = "Farm the selected NPC",
+				Name = "Walk To NPC",
+				Description = "Walk around obstacles to the selected NPC. Uses ground paths instead of hovering.",
 				Default = false,
 				Flag = "TweenToNPCToggle",
 				Callback = function(tweenToNpc)
                     local env = getgenv()
                     if not tweenToNpc then
+                        if env.__YanusGround then env.__YanusGround.Stop("npc") end
                         local quest = env.__TensenAutoQuest
                         if quest and quest.Enabled then
                             quest.Set(false)
@@ -23784,7 +23902,7 @@ Private server travel needs teleport queue support]],
 
 			Farm:AddSlider({
 				Name = "NPC Offset",
-				Description = "Height above the NPC",
+				Description = "Legacy advanced tween height; ignored by Walk To NPC and quest farming.",
 				Min = 0,
 				Max = 25,
 				Suffix = " studs",
@@ -27403,6 +27521,7 @@ Private server travel needs teleport queue support]],
 
 			-- true when movement signals should be sent (a farm is running and we are alive)
 			getgenv().MoveSignalsWanted = function()
+                if getgenv().__YanusGround and getgenv().__YanusGround.Current then return false end
 				if getgenv().MoveSignals == false then
 					return false
 				end
@@ -35741,6 +35860,7 @@ Private server travel needs teleport queue support]],
 							if running and tweenState().Enabled and tweenState().IsMobTween then
 								stopTween()
 							end
+                            getgenv().__YanusGround.Stop("npc")
 							running = false
 							return
 						end
@@ -35753,15 +35873,10 @@ Private server travel needs teleport queue support]],
 						if getgenv().NPCAutoEquip ~= false then
 							pcall(getgenv().equipFarmWeapon)
 						end
-						if not tweenState().Enabled and getgenv().findNearestAlive(getgenv().SelectedNPC) then
-							getgenv().TweenToMob2({
-								MobName = getgenv().SelectedNPC,
-								BossKey = "NPC",
-								Speed = getgenv().TweenSpeedMaster or 70,
-								Offset = Vector3.new(0, tonumber(getgenv().NPCOffsetY) or 9, 0),
-								Container = workspace:FindFirstChild("NPCs") or workspace,
-							})
-						end
+                        local target = getgenv().findNearestAlive(getgenv().SelectedNPC)
+                        local part = target and (target:FindFirstChild("HumanoidRootPart") or target.PrimaryPart)
+                        if part then getgenv().__YanusGround.Go(part, "npc", 4)
+                        else getgenv().__YanusGround.Stop("npc") end
 					end)
 				end
 
