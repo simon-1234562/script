@@ -1,5 +1,7 @@
-# island-ground-v10
+# dialogue-any-position-v11
 
-The reported kick occurred during Tween To Island from Shell's Town to Town of Beginnings, an ocean trip outside the NPC walking update. Island flight is now removed from that worker. Walk To Island (land only) supports nearby ground routes; destinations beyond 512 studs show Boat travel required. Automatic boat travel is not implemented.
+NPC combat and quest-giver approach use tween movement again at the user's request. NPC combat height is capped at six studs, speed at 40; no close teleport is requested. The giver approach retains its front offset at root height and capped approach speed. Island ocean flight remains disabled.
 
-Compilation and actual-worker simulated checks pass. Live travel behavior remains untested. Independent boss/teleport modes retain their existing code.
+The quest helper scans visible NPCCHAT/Dialogue choices by label and hierarchy, rather than requiring NPCCHAT/Frame/go or a left-hand button. It recognizes centered ellipsis, Continue/Next and common positive acceptance labels, including nested labels. Hidden, decline and purchase-labelled choices are excluded. Click fallback uses the chosen button's current position. It still confirms the matching quest before combat. Unknown dialogue wording may require a diagnostic.
+
+Compilation and actual-controller simulated tests pass, including Kevin-style center/repositioned choices, Unicode ellipsis, nested labels, decline/purchase exclusions, NPC tween dispatch and existing dialogue/stop regressions. Live verification remains pending; movement compatibility is not guaranteed.
