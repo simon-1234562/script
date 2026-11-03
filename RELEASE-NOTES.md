@@ -1,7 +1,5 @@
-# ground-paths-v9
+# island-ground-v10
 
-Quest acceptance/combat/return was reported working, but direct NPC tweening crossed rocks and used an airborne offset. The shared NPC driver and quest-giver approach now walk around obstacles with normal pathfinding. No collision changes, root-position writes, hover offsets or movement movers are used by this new route. Existing independent boss/travel tweens remain unchanged.
+The reported kick occurred during Tween To Island from Shell's Town to Town of Beginnings, an ocean trip outside the NPC walking update. Island flight is now removed from that worker. Walk To Island (land only) supports nearby ground routes; destinations beyond 512 studs show Boat travel required. Automatic boat travel is not implemented.
 
-Route failures stop and show a reason. Fast Walk is paused while navigating. Noclip must be off. Walking requires loaded ground/path geometry; it is not a guarantee against game kicks.
-
-Compilation and isolated quest, waypoint, blocked-path, timeout, airborne, cancellation and NPC-driver tests pass. Ground movement has not yet been tested in GPO. The earlier compact UI/removal history is described in REMOVALS.md and the prior commit.
+Compilation and actual-worker simulated checks pass. Live travel behavior remains untested. Independent boss/teleport modes retain their existing code.
