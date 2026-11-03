@@ -41,3 +41,7 @@ Removed the TweenToIsland worker's direct flight/close-teleport call. The visibl
 ## NPC tween restoration (v11)
 
 At the user's request, NPC combat and giver approach use tween movement again. The visible manual control is Tween To NPC with its existing flag. Combat uses a six-stud height cap and a 40 speed cap, with no close teleport request; the giver front offset remains at root height. The island flight removal remains in effect. v9/v10 descriptions of ground-only NPC movement are historical.
+
+## Hover reset (v12)
+
+Removed the v11 six-stud combat-height clamp and two-stud behind offset. NPC Offset again controls 0–25 studs, default nine, directly overhead. NPC combat uses full 3D steering; no horizontal-only raycast mode. Speed cap and no-close-teleport setting remain.
