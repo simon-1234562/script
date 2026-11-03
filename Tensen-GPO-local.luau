@@ -16,7 +16,7 @@ env.__TensenGC = getgc
 env.AutoTrade, env.TweenToPlayer, env.AutoLoad = false, false, false
 env.ESP = env.ESP or {}
 env.ESP.Players, env.ESP.AnimatedBorder, env.ESP.Pulse, env.ESP.Rainbow = false, false, false, false
-env.__YanusBuild = "ground-paths-v9"
+env.__YanusBuild = "island-ground-v10"
 
 env.__YanusGround = (function()
 -- Ordinary Humanoid walking; no collision changes, hover, or position writes.
@@ -40,6 +40,14 @@ end
 local function fail(j,reason)
     if N.Current~=j then return end
     N.Stop();N.Status=reason
+    if j.owner=="island" then
+        g.StartTweenIsland=false
+        if g.TensenUILib then
+            pcall(function()g.TensenUILib:SetFlag("StartTweenIslandToggle",false)end)
+            pcall(function()g.TensenUILib:Notify({Title="Island walking stopped",Content=reason..". Use a boat for ocean travel.",Duration=8})end)
+        end
+        return
+    end
     local q=g.__TensenAutoQuest
     if q and q.Enabled then q.Fail(reason)
     else
@@ -24836,11 +24844,14 @@ Private server travel needs teleport queue support]],
 			})
 
 			Tween:AddToggle({
-				Name = "Tween To Island",
-				Description = "Fly to the island picked above",
+				Name = "Walk To Island (land only)",
+				Description = "Nearby land paths only. Travel between islands by boat.",
 				Default = getgenv().StartTweenIsland or false,
 				Flag = "StartTweenIslandToggle",
-				Callback = saveTo("StartTweenIsland"),
+				Callback = function(enabled)
+                    getgenv().StartTweenIsland = enabled == true
+                    if not enabled and getgenv().__YanusGround then getgenv().__YanusGround.Stop("island") end
+                end,
 			})
 
 			Tween:AddSlider({
@@ -41568,60 +41579,51 @@ Private server travel needs teleport queue support]],
 					return getgenv().__TensenTweenState or { Enabled = false }
 				end
 
-				local startedByUs = false
-				spawnLoop("TweenToIsland", function(alive)
-					while alive() do
-						task.wait()
-						if not getgenv().StartTweenIsland then
-							if startedByUs and tweenState().Enabled and getgenv().StopCurrentTween then
-								-- the toggle callback's "stop the tween" is lost, so stop our own tween here
-								pcall(getgenv().StopCurrentTween)
-							end
-							startedByUs = false
-							task.wait(0.1)
-							continue
-						end
-						local island = getgenv().CurrentIsland
-						if type(island) == "table" then
-							island = island[1]
-						end
-						if not island or island == "" or island == "None" then
-							task.wait(0.5)
-							continue
-						end
-						local target = getgenv().tpFixedSpot and getgenv().tpFixedSpot(island)
-						if typeof(target) == "Vector3" then
-							target = CFrame.new(target)
-						end
-						target = target or (resolveIslandTarget(island))
-						if not target then
-							task.wait(1)
-							continue
-						end
-						local tweenTo = getgenv().TweenToCFrame
-						if type(tweenTo) ~= "function" then
-							task.wait(1)
-							continue
-						end
-						startedByUs = true
-						tweenTo({
-							CFrame = target,
-							Speed = getgenv().TweenSpeedIsland or 70,
-							StopDistance = 5,
-							TeleportOnClose = true,
-							TeleportDistance = 5,
-						})
-						repeat
-							task.wait()
-						until not (tweenState().Enabled and getgenv().StartTweenIsland)
-						if not getgenv().StartTweenIsland then
-							if getgenv().StopCurrentTween then
-								pcall(getgenv().StopCurrentTween)
-							end
-							startedByUs = false
-						end
-					end
-				end)
+                local startedByUs = false
+                spawnLoop("TweenToIsland", function(alive)
+                    local destination, selected
+                    while alive() do
+                        task.wait(0.25)
+                        local g=getgenv()
+                        if not g.StartTweenIsland then
+                            if startedByUs then g.__YanusGround.Stop("island") end
+                            startedByUs=false;destination=nil;selected=nil
+                            continue
+                        end
+                        local island=g.CurrentIsland
+                        if type(island)=="table"then island=island[1]end
+                        local character=game:GetService("Players").LocalPlayer.Character
+                        local root=character and character:FindFirstChild("HumanoidRootPart")
+                        if not root or not island or island==""or island=="None"then continue end
+                        if not destination or selected~=island then
+                            local target=g.tpFixedSpot and g.tpFixedSpot(island)
+                            if typeof(target)=="Vector3"then target=CFrame.new(target)end
+                            target=target or resolveIslandTarget(island)
+                            if not target then
+                                g.StartTweenIsland=false
+                                if g.TensenUILib then g.TensenUILib:SetFlag("StartTweenIslandToggle",false)end
+                                continue
+                            end
+                            destination={Position=target.Position,Parent=true};selected=island
+                        end
+                        -- Island movement is restricted to nearby ground paths, never ocean flight.
+                        if (destination.Position-root.Position).Magnitude>512 then
+                            g.StartTweenIsland=false;g.__YanusGround.Stop("island")
+                            if g.TensenUILib then
+                                g.TensenUILib:SetFlag("StartTweenIslandToggle",false)
+                                g.TensenUILib:Notify({Title="Boat travel required",Content="This destination is outside the nearby walking area. Use a boat between islands; ocean tweening is disabled.",Duration=8})
+                            end
+                            continue
+                        end
+                        startedByUs=true
+                        g.__YanusGround.Go(destination,"island",5)
+                        if not g.__YanusGround.Current and g.__YanusGround.Status=="in range"then
+                            g.StartTweenIsland=false
+                            if g.TensenUILib then g.TensenUILib:SetFlag("StartTweenIslandToggle",false)end
+                        end
+                    end
+                    getgenv().__YanusGround.Stop("island")
+                end)
 			end
 
 			-- movement + protection tab loops
