@@ -22,3 +22,5 @@ PASS: actual NPC worker dispatches ground navigation and stops/pauses on missing
 Live validation remains pending. The floor-distance kick text was not supplied, so its exact cause is not established.
 
 Island-ground-v10: complete build compiles. Actual worker mock passes distant-route refusal with zero legacy tween calls, nearby ground dispatch, stop on toggle off, and toggle clearing on arrival. Ground navigator regressions pass, including island-only failure cleanup. No live boat automation or GPO travel test performed.
+
+v11 2026-11-03: Complete compile and actual-controller regressions pass. Added centered/right/repositioned button, ASCII/Unicode ellipsis, nested label and hidden/decline exclusion cases. Restored NPC tween worker regression checks height/speed cap, single active engine, quest-pause/disable cleanup and missing target. Previous ground-only NPC dispatch assertion is superseded; island ground worker is unchanged. Live testing is pending.
