@@ -55,3 +55,7 @@ Tween To Island is replaced by **Walk To Island (land only)**, retaining StartTw
 Auto Farm and the manual **Tween To NPC** control use NPC tweening again. Combat height is capped at six studs and speed at 40; the giver approach uses its front offset at root height. The island control remains nearby ground walking only, with boats required for ocean trips.
 
 Dialogue selection searches visible choices by meaning, wherever they appear. Centered “…”/“…” continuation, Continue, Next and common accept labels work without relying on the left button or the name go. The matching active quest must still be confirmed. Unknown text may require a diagnostic; purchases and decline choices are skipped.
+
+## Latest NPC positioning (v12)
+
+NPC combat defaults to nine studs directly above the target. It uses full 3D steering instead of the horizontal-only raycast mode that could leave the player beside the enemy. NPC Offset sets the height (0–25); this supersedes the v11 six-stud cap. Quest-giver approach and dialogue fixes remain unchanged.
